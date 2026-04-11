@@ -1,4 +1,4 @@
-﻿// El paquete server contiene el código del servidor.
+// El paquete server contiene el código del servidor.
 // Interactúa con el cliente mediante una API JSON/HTTP
 package server
 

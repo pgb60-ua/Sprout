@@ -1,4 +1,4 @@
-﻿// El paquete client contiene la lógica de interacción con el usuario
+// El paquete client contiene la lógica de interacción con el usuario
 // así como de comunicación con el servidor.
 package client
 
