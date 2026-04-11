@@ -1,4 +1,4 @@
-// El paquete client contiene la lógica de interacción con el usuario
+﻿// El paquete client contiene la lógica de interacción con el usuario
 // así como de comunicación con el servidor.
 package client
 
@@ -26,7 +26,7 @@ type client struct {
 }
 
 // Run es la única función exportada de este paquete.
-// Crea un client interno y ejecuta el bucle principal.
+// Crea un cliente interno y ejecuta el bucle principal.
 func Run() {
 	// Creamos un logger con prefijo 'cli' para identificar
 	// los mensajes en la consola.
@@ -67,6 +67,7 @@ func (c *client) runLoop() {
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
+				"Gestión de ficheros",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -96,8 +97,10 @@ func (c *client) runLoop() {
 			case 2:
 				c.updateData()
 			case 3:
-				c.logoutUser()
+				c.fileManagerMenu()
 			case 4:
+				c.logoutUser()
+			case 5:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -301,4 +304,114 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+// fileManagerMenu permite al usuario gestionar archivos y carpetas.
+func (c *client) fileManagerMenu() {
+	for {
+		ui.ClearScreen()
+		title := "Gestión de ficheros y carpetas"
+		options := []string{
+			"Listar directorio",
+			"Crear fichero",
+			"Borrar fichero",
+			"Modificar fichero",
+			"Visualizar fichero",
+			"Crear carpeta",
+			"Borrar carpeta",
+			"Volver al menú principal",
+		}
+
+		choice := ui.PrintMenu(title, options)
+		switch choice {
+		case 1: // Listar directorio
+			path := ui.ReadInput("Introduce el directorio a listar (deja vací­o para la raí­z)")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionListFiles,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && len(res.Files) > 0 {
+				fmt.Println("Contenido:")
+				for _, f := range res.Files {
+					fmt.Println("-", f)
+				}
+			}
+		case 2: // Crear fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del nuevo fichero")
+			data := ui.ReadInput("Introduce el contenido del fichero")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionCreateFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     data,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 3: // Borrar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a borrar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionDeleteFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 4: // Modificar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a modificar")
+			data := ui.ReadMultiline("Introduce el nuevo contenido del fichero, el contenido actual se sobrescribirá.")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionModifyFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     data,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 5: // Visualizar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a visualizar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionReadFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("--- Contenido ---")
+				fmt.Println(res.Data)
+				fmt.Println("-----------------")
+			}
+		case 6: // Crear carpeta
+			path := ui.ReadInput("Introduce la ruta/nombre de la nueva carpeta")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionCreateDir,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 7: // Borrar carpeta
+			path := ui.ReadInput("Introduce la ruta/nombre de la carpeta a borrar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionDeleteDir,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 8: // Volver al menú principal
+			return
+		}
+		ui.Pause("Pulsa [Enter] para continuar...")
+	}
 }
