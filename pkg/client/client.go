@@ -212,6 +212,12 @@ func (c *client) fetchData() {
 	if res.Success {
 		fmt.Println("Tus datos:", res.Data)
 	}
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+		c.currentUser = ""
+		c.authToken = ""
+	}
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
@@ -237,6 +243,12 @@ func (c *client) updateData() {
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+		c.currentUser = ""
+		c.authToken = ""
+	}
 }
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
@@ -262,6 +274,12 @@ func (c *client) logoutUser() {
 
 	// Si fue exitoso, limpiamos la sesión local.
 	if res.Success {
+		c.currentUser = ""
+		c.authToken = ""
+	}
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
 		c.currentUser = ""
 		c.authToken = ""
 	}

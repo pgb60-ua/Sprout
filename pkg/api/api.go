@@ -29,9 +29,17 @@ type Request struct {
 }
 
 type Response struct {
+<<<<<<< 9-tokens-de-inicio-seguro
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	Token          string `json:"token,omitempty"`
+	Data           string `json:"data,omitempty"`
+	SessionExpired bool   `json:"session_expired,omitempty"`
+=======
 	Success bool     `json:"success"`
 	Message string   `json:"message"`
 	Token   string   `json:"token,omitempty"`
 	Data    string   `json:"data,omitempty"`
 	Files   []string `json:"files,omitempty"`
+>>>>>>> develop
 }
