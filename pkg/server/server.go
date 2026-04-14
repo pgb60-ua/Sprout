@@ -10,19 +10,26 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"sprout/pkg/utils"
 )
 
 // server encapsula el estado de nuestro servidor
 type server struct {
-	db           store.Store // base de datos
-	log          *log.Logger // logger para mensajes de error e información
-	tokenCounter int64       // contador para generar tokens
+	db  store.Store // base de datos
+	log *log.Logger // logger para mensajes de error e información
 }
+
+type session struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
+// const sessionDuration = 24 * time.Hour
+const lenthToken = 16
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -108,13 +115,6 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// generateToken crea un token único incrementando un contador interno (inseguro)
-func (s *server) generateToken() string {
-	// atomic es necesario al haber paralelismo en las peticiones HTTP.
-	id := atomic.AddInt64(&s.tokenCounter, 1)
-	return fmt.Sprintf("token_%d", id)
-}
-
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
 // - Creamos entrada vacía en 'userdata' para el usuario
@@ -164,8 +164,22 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token := s.generateToken()
-	if err := s.db.Put("sessions", []byte(req.Username), []byte(token)); err != nil {
+	token, err := utils.NewRamdomToken(lenthToken)
+	if err != nil {
+		return api.Response{Success: false, Message: "No se puedo crear un token"}
+	}
+
+	sess := session{
+		Token:     token,
+		ExpiresAt: time.Now().Add(sessionDuration),
+	}
+
+	data, err := json.Marshal(sess)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al serializar token"}
+	}
+
+	if err := s.db.Put("sessions", []byte(req.Username), []byte(data)); err != nil {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
@@ -249,9 +263,19 @@ func (s *server) userExists(username string) (bool, error) {
 // isTokenValid comprueba que el token almacenado en 'sessions'
 // coincida con el token proporcionado.
 func (s *server) isTokenValid(username, token string) bool {
-	storedToken, err := s.db.Get("sessions", []byte(username))
+	storedSession, err := s.db.Get("sessions", []byte(username))
 	if err != nil {
 		return false
 	}
-	return string(storedToken) == token
+
+	var sess session
+	if err := json.Unmarshal(storedSession, &sess); err != nil {
+		return false
+	}
+
+	if time.Now().After(sess.ExpiresAt) {
+		s.db.Delete("sessions", []byte(username))
+		return false
+	}
+	return sess.Token == token
 }
