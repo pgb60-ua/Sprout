@@ -142,6 +142,14 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
+	if err := utils.ValidateUsername(req.Username); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	if err := utils.ValidatePassword(req.Password); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
 	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(req.Username)
 	if err != nil {
