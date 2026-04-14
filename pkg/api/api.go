@@ -8,6 +8,15 @@ const (
 	ActionFetchData  = "fetchData"
 	ActionUpdateData = "updateData"
 	ActionLogout     = "logout"
+
+	// File and folder management actions
+	ActionCreateFile = "createFile"
+	ActionDeleteFile = "deleteFile"
+	ActionModifyFile = "modifyFile"
+	ActionReadFile   = "readFile"
+	ActionCreateDir  = "createDir"
+	ActionDeleteDir  = "deleteDir"
+	ActionListFiles  = "listFiles"
 )
 
 type Request struct {
@@ -16,12 +25,21 @@ type Request struct {
 	Password string `json:"password,omitempty"`
 	Token    string `json:"token,omitempty"`
 	Data     string `json:"data,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 type Response struct {
+<<<<<<< 9-tokens-de-inicio-seguro
 	Success        bool   `json:"success"`
 	Message        string `json:"message"`
 	Token          string `json:"token,omitempty"`
 	Data           string `json:"data,omitempty"`
 	SessionExpired bool   `json:"session_expired,omitempty"`
+=======
+	Success bool     `json:"success"`
+	Message string   `json:"message"`
+	Token   string   `json:"token,omitempty"`
+	Data    string   `json:"data,omitempty"`
+	Files   []string `json:"files,omitempty"`
+>>>>>>> develop
 }

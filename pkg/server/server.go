@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"sprout/pkg/api"
@@ -87,7 +90,7 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
-	// Evitamos que se envíen múltiples objetos JSON concatenados.
+	// Evitamos que se enví­en múltiples objetos JSON concatenados.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
@@ -106,6 +109,20 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.updateData(req)
 	case api.ActionLogout:
 		res = s.logoutUser(req)
+	case api.ActionCreateFile:
+		res = s.createFile(req)
+	case api.ActionDeleteFile:
+		res = s.deleteFile(req)
+	case api.ActionModifyFile:
+		res = s.modifyFile(req)
+	case api.ActionReadFile:
+		res = s.readFile(req)
+	case api.ActionCreateDir:
+		res = s.createDir(req)
+	case api.ActionDeleteDir:
+		res = s.deleteDir(req)
+	case api.ActionListFiles:
+		res = s.listFiles(req)
 	default:
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
@@ -117,7 +134,7 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 
 // registerUser registra un nuevo usuario, si no existe.
 // - Guardamos la contraseña en el namespace 'auth'
-// - Creamos entrada vacía en 'userdata' para el usuario
+// - Creamos entrada vací­a en 'userdata' para el usuario
 func (s *server) registerUser(req api.Request) api.Response {
 	// Validación básica
 	if req.Username == "" || req.Password == "" {
@@ -127,18 +144,24 @@ func (s *server) registerUser(req api.Request) api.Response {
 	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(req.Username)
 	if err != nil {
+		utils.VerifyPassword(req.Password, utils.DummyHash)
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
 	}
 	if exists {
 		return api.Response{Success: false, Message: "El usuario ya existe"}
 	}
 
+	hash, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return api.Response{Success: false, Message: fmt.Sprintf("Error al hashear contraseña: %v", err)}
+	}
+
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	if err := s.db.Put("auth", []byte(req.Username), []byte(req.Password)); err != nil {
+	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
-	// Creamos una entrada vacía para los datos en 'userdata'
+	// Creamos una entrada vací­a para los datos en 'userdata'
 	if err := s.db.Put("userdata", []byte(req.Username), []byte("")); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
@@ -159,8 +182,12 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Comparamos
-	if string(storedPass) != req.Password {
-		return api.Response{Success: false, Message: "Credenciales inválidas"}
+	valid, err := utils.VerifyPassword(req.Password, string(storedPass))
+	if err != nil {
+		return api.Response{Success: false, Message: fmt.Sprintf("Error al verificar la contraseña: %v", err)}
+	}
+	if !valid {
+		return api.Response{Success: false, Message: "Credenciales invalidos"}
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
@@ -278,4 +305,192 @@ func (s *server) isTokenValid(username, token string) bool {
 		return false
 	}
 	return sess.Token == token
+}
+
+// safePath valida el path para evitar Path Traversal.
+// Restringe el acceso unicamente al directorio asignado para el usuario en data/files/<username>.
+func (s *server) safePath(username, reqPath string) (string, error) {
+	baseDir := filepath.Join("data", "files", username)
+	if err := os.MkdirAll(baseDir, 0755); err != nil {
+		return "", err
+	}
+	baseDirAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+
+	targetPath := filepath.Join(baseDir, reqPath)
+	targetPathAbs, err := filepath.Abs(targetPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Prevenir path traversal
+	if !strings.HasPrefix(targetPathAbs, baseDirAbs) {
+		return "", errors.New("acceso denegado o path inválido")
+	}
+	return targetPathAbs, nil
+}
+
+func (s *server) createFile(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	err = os.WriteFile(path, []byte(req.Data), 0644)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al crear el fichero"}
+	}
+
+	return api.Response{Success: true, Message: "Fichero creado con éxito"}
+}
+
+func (s *server) deleteFile(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
+	}
+
+	if err := os.Remove(path); err != nil {
+		return api.Response{Success: false, Message: "Error al borrar fichero"}
+	}
+
+	return api.Response{Success: true, Message: "Fichero borrado con éxito"}
+}
+
+func (s *server) modifyFile(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
+	}
+
+	err = os.WriteFile(path, []byte(req.Data), 0644)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al modificar el fichero"}
+	}
+
+	return api.Response{Success: true, Message: "Fichero modificado con éxito"}
+}
+
+func (s *server) readFile(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al leer el fichero"}
+	}
+
+	return api.Response{Success: true, Message: "Fichero leído con éxito", Data: string(data)}
+}
+
+func (s *server) createDir(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del directorio"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	err = os.MkdirAll(path, 0755)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al crear el directorio"}
+	}
+
+	return api.Response{Success: true, Message: "Directorio creado con éxito"}
+}
+
+func (s *server) deleteDir(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del directorio"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return api.Response{Success: false, Message: "El directorio no existe o no es un directorio"}
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		return api.Response{Success: false, Message: "Error al borrar directorio"}
+	}
+
+	return api.Response{Success: true, Message: "Directorio borrado con éxito"}
+}
+
+func (s *server) listFiles(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+	}
+
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	var files []string
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return api.Response{Success: true, Message: "Directorio vacío", Files: []string{}}
+		}
+		return api.Response{Success: false, Message: "Error al listar ficheros"}
+	}
+
+	for _, entry := range entries {
+		suffix := ""
+		if entry.IsDir() {
+			suffix = "/"
+		}
+		files = append(files, entry.Name()+suffix)
+	}
+
+	return api.Response{Success: true, Message: "Listado correcto", Files: files}
 }
