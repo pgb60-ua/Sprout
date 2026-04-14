@@ -193,7 +193,7 @@ func (s *server) fetchData(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
 	}
 
 	// Obtenemos los datos asociados al usuario desde 'userdata'
@@ -217,7 +217,7 @@ func (s *server) updateData(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
 	}
 
 	// Escribimos el nuevo dato en 'userdata'
@@ -235,7 +235,7 @@ func (s *server) logoutUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
 	}
 
 	// Borramos la entrada en 'sessions'
