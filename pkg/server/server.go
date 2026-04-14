@@ -15,6 +15,7 @@ import (
 
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"sprout/pkg/utils"
 )
 
 // server encapsula el estado de nuestro servidor
@@ -127,14 +128,20 @@ func (s *server) registerUser(req api.Request) api.Response {
 	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(req.Username)
 	if err != nil {
+		utils.VerifyPassword(req.Password, utils.DummyHash)
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
 	}
 	if exists {
 		return api.Response{Success: false, Message: "El usuario ya existe"}
 	}
 
+	hash, err := utils.HashPassword(req.Password)
+	if err != nil {
+		return api.Response{Success: false, Message: fmt.Sprintf("Error al hashear contraseña: %v", err)}
+	}
+
 	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
-	if err := s.db.Put("auth", []byte(req.Username), []byte(req.Password)); err != nil {
+	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
@@ -159,8 +166,12 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	// Comparamos
-	if string(storedPass) != req.Password {
-		return api.Response{Success: false, Message: "Credenciales inválidas"}
+	valid, err := utils.VerifyPassword(req.Password, string(storedPass))
+	if err != nil {
+		return api.Response{Success: false, Message: fmt.Sprintf("Error al verificar la contraseña: %v", err)}
+	}
+	if !valid {
+		return api.Response{Success: false, Message: "Credenciales invalidos"}
 	}
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
