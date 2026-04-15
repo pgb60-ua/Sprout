@@ -264,7 +264,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
-	return api.Response{Success: true, Message: "Login exitoso", Token: token}
+	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
 }
 
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.

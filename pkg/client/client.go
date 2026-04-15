@@ -24,6 +24,7 @@ type client struct {
 	log         *log.Logger
 	currentUser string
 	authToken   string
+	totpEnabled bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
 	httpClient  *http.Client
 }
 
@@ -65,11 +66,16 @@ func (c *client) runLoop() {
 				"Salir",
 			}
 		} else {
+			totpOption := "Activar TOTP"
+			if c.totpEnabled {
+				totpOption = "Reactivar TOTP"
+			}
+
 			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
-				"Activar TOTP",
+				totpOption,
 				"Gestión de ficheros",
 				"Cerrar sesión",
 				"Salir",
@@ -200,6 +206,7 @@ func (c *client) loginUser() {
 		if totopRes.Success {
 			c.currentUser = username
 			c.authToken = totopRes.Token
+			c.totpEnabled = true
 		}
 		return
 	}
@@ -207,6 +214,7 @@ func (c *client) loginUser() {
 	// Sin TOTP
 	c.currentUser = username
 	c.authToken = res.Token
+	c.totpEnabled = res.TOTPEnabled
 	fmt.Println("Sesión iniciada con éxito. Token guardado.")
 }
 
@@ -241,6 +249,7 @@ func (c *client) fetchData() {
 		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
 		c.currentUser = ""
 		c.authToken = ""
+		c.totpEnabled = false
 	}
 }
 
@@ -272,6 +281,7 @@ func (c *client) updateData() {
 		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
 		c.currentUser = ""
 		c.authToken = ""
+		c.totpEnabled = false
 	}
 }
 
@@ -300,12 +310,14 @@ func (c *client) logoutUser() {
 	if res.Success {
 		c.currentUser = ""
 		c.authToken = ""
+		c.totpEnabled = false
 	}
 
 	if !res.Success && res.SessionExpired {
 		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
 		c.currentUser = ""
 		c.authToken = ""
+		c.totpEnabled = false
 	}
 }
 
@@ -462,11 +474,40 @@ func (c *client) setupTOTP() {
 	ui.ClearScreen()
 	fmt.Println("** Activar TOTP **")
 
+	// Si ya tiene TOTP activo, pregunta qué hacer
+	if c.totpEnabled {
+		choice := ui.PrintMenu("Ya tienes TOTP activo", []string{
+			"Usar secreto actual (reescanear)",
+			"Generar nuevo secreto",
+		})
+
+		if choice == 1 {
+			// Solo muestra el QR del secreto actual, sin confirmación
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionTOTPSetup,
+				Username: c.currentUser,
+				Token:    c.authToken,
+			})
+			if !res.Success {
+				fmt.Println("Error:", res.Message)
+				return
+			}
+			qr, err := qrcode.New(res.OTPAuthURI, qrcode.Medium)
+			if err != nil {
+				fmt.Println("URI TOTP:", res.OTPAuthURI)
+			} else {
+				fmt.Println(qr.ToSmallString(false))
+			}
+			return
+		}
+	}
+
 	// Pido el secreto al servidor
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionTOTPSetup,
-		Username: c.currentUser,
-		Token:    c.authToken,
+		Action:         api.ActionTOTPSetup,
+		Username:       c.currentUser,
+		Token:          c.authToken,
+		ForceNewSecret: c.totpEnabled,
 	})
 	if !res.Success {
 		fmt.Println("Error:", res.Message)
@@ -480,15 +521,22 @@ func (c *client) setupTOTP() {
 		fmt.Println(qr.ToSmallString(false))
 	}
 
-	// pido el codigo para confirmar
-	code := ui.ReadInput("Introduce el codigo de tu app para confirmar")
-	confirmRes := c.sendRequest(api.Request{
-		Action:   api.ActionTOTPConfirm,
-		Username: c.currentUser,
-		Token:    c.authToken,
-		TOTPCode: code,
-	})
+	for {
+		code := ui.ReadInput("Introduce el codigo de tu app (o 'cancelar')")
+		if code == "cancelar" {
+			return
+		}
+		confirmRes := c.sendRequest(api.Request{
+			Action:   api.ActionTOTPConfirm,
+			Username: c.currentUser,
+			Token:    c.authToken,
+			TOTPCode: code,
+		})
 
-	fmt.Println("Éxito:", confirmRes.Success)
-	fmt.Println("Mensaje:", confirmRes.Message)
+		fmt.Println("Mensaje:", confirmRes.Message)
+		if confirmRes.Success {
+			c.totpEnabled = true
+			return
+		}
+	}
 }

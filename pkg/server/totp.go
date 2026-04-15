@@ -47,21 +47,23 @@ func (s *server) tOTPSetup(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
 	}
 
-	secret, err := utils.GenerateTOTPSecret()
-	if err != nil {
-		return api.Response{Success: false, Message: "Error al generar el secreto TOTP"}
-	}
-
 	// Creo datos vacios si no existen
 	td, err := s.getTOTPData(req.Username)
 	if err != nil {
 		td = totpData{}
 	}
-
-	// Guardo como pendiente
-	td.PendingSecret = secret
-	if err := s.saveTOTPData(req.Username, td); err != nil {
-		return api.Response{Success: false, Message: "Error al guardar secreto TOTP"}
+	var secret string
+	if (td.PendingSecret == "" && !td.Enabled) || req.ForceNewSecret {
+		secret, err = utils.GenerateTOTPSecret()
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar el secreto TOTP"}
+		}
+		td.PendingSecret = secret
+		if err := s.saveTOTPData(req.Username, td); err != nil {
+			return api.Response{Success: false, Message: "Error al guardar secreto TOTP"}
+		}
+	} else {
+		secret = td.PendingSecret
 	}
 
 	return api.Response{
@@ -143,5 +145,5 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al guardar sesión"}
 	}
 
-	return api.Response{Success: true, Message: "Login completo", Token: token}
+	return api.Response{Success: true, Message: "Login completo", Token: token, TOTPEnabled: true}
 }
