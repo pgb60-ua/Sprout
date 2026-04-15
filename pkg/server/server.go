@@ -212,9 +212,9 @@ func (s *server) loginUser(req api.Request) api.Response {
 	s.ClearLoginFailures(req.Username)
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token, err := utils.NewRamdomToken(lenthToken)
+	token, err := utils.NewRandomToken(lenthToken)
 	if err != nil {
-		return api.Response{Success: false, Message: "No se puedo crear un token"}
+		return api.Response{Success: false, Message: "No se pudo crear un token"}
 	}
 
 	sess := session{
