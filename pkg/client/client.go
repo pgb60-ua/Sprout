@@ -14,6 +14,8 @@ import (
 
 	"sprout/pkg/api"
 	"sprout/pkg/ui"
+
+	"github.com/skip2/go-qrcode"
 )
 
 // client estructura interna no exportada que controla
@@ -67,6 +69,7 @@ func (c *client) runLoop() {
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
+				"Activar TOTP",
 				"Gestión de ficheros",
 				"Cerrar sesión",
 				"Salir",
@@ -97,10 +100,12 @@ func (c *client) runLoop() {
 			case 2:
 				c.updateData()
 			case 3:
-				c.fileManagerMenu()
+				c.setupTOTP()
 			case 4:
-				c.logoutUser()
+				c.fileManagerMenu()
 			case 5:
+				c.logoutUser()
+			case 6:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -178,12 +183,31 @@ func (c *client) loginUser() {
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
 
-	// Si login fue exitoso, guardamos currentUser y el token.
-	if res.Success {
-		c.currentUser = username
-		c.authToken = res.Token
-		fmt.Println("Sesión iniciada con éxito. Token guardado.")
+	if !res.Success {
+		return
 	}
+
+	// Segundo factor TOTP
+	if res.RequiresTOTP {
+		code := ui.ReadInput("Introduce el codigo TOTP")
+		totopRes := c.sendRequest(api.Request{
+			Action:    api.ActionLoginTOTP,
+			TempToken: res.TempToken,
+			TOTPCode:  code,
+		})
+		fmt.Println("Éxito:", totopRes.Success)
+		fmt.Println("Mensaje:", totopRes.Message)
+		if totopRes.Success {
+			c.currentUser = username
+			c.authToken = totopRes.Token
+		}
+		return
+	}
+
+	// Sin TOTP
+	c.currentUser = username
+	c.authToken = res.Token
+	fmt.Println("Sesión iniciada con éxito. Token guardado.")
 }
 
 // fetchData pide datos privados al servidor.
@@ -432,4 +456,39 @@ func (c *client) fileManagerMenu() {
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
 	}
+}
+
+func (c *client) setupTOTP() {
+	ui.ClearScreen()
+	fmt.Println("** Activar TOTP **")
+
+	// Pido el secreto al servidor
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionTOTPSetup,
+		Username: c.currentUser,
+		Token:    c.authToken,
+	})
+	if !res.Success {
+		fmt.Println("Error:", res.Message)
+		return
+	}
+	qr, err := qrcode.New(res.OTPAuthURI, qrcode.Medium)
+	fmt.Println("URI TOTP:", res.OTPAuthURI)
+	if err != nil {
+		fmt.Println("URI TOTP:", res.OTPAuthURI)
+	} else {
+		fmt.Println(qr.ToSmallString(false))
+	}
+
+	// pido el codigo para confirmar
+	code := ui.ReadInput("Introduce el codigo de tu app para confirmar")
+	confirmRes := c.sendRequest(api.Request{
+		Action:   api.ActionTOTPConfirm,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		TOTPCode: code,
+	})
+
+	fmt.Println("Éxito:", confirmRes.Success)
+	fmt.Println("Mensaje:", confirmRes.Message)
 }
