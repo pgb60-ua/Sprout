@@ -31,7 +31,7 @@ type session struct {
 	ExpiresAt time.Time
 }
 
-// const sessionDuration = 24 * time.Hour
+const sessionDuration = 24 * time.Hour
 const lenthToken = 16
 
 // Run inicia la base de datos y arranca el servidor HTTP.

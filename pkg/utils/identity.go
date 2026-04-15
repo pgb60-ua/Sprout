@@ -30,4 +30,5 @@ func ValidatePassword(password string) error {
 	if len(password) < minPasswordLen {
 		return fmt.Errorf("la contraseña debe tener al menos %d caracteres", minPasswordLen)
 	}
+	return nil
 }
