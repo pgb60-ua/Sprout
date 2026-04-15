@@ -11,6 +11,7 @@ type totpData struct {
 	Enabled       bool   `json:"enabled"`
 	Secret        string `json:"secret"`
 	PendingSecret string `json:"pending_secret"`
+	LastCode      string `json:"last_code"`
 }
 
 type pendingTOTPLogin struct {
@@ -83,12 +84,17 @@ func (s *server) tOTPConfirm(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "No hay un secreto TOTP pendiente"}
 	}
 
+	if td.LastCode == req.TOTPCode {
+		return api.Response{Success: false, Message: "Codigo ya utilizado"}
+	}
+
 	// Verifico cofigo con el secreto pendiente
 	if !utils.VerifyTOTPCode(td.PendingSecret, req.TOTPCode, time.Now()) {
 		return api.Response{Success: false, Message: "Codigo TOTP incorrecto"}
 	}
 
 	// Activo el TOTP
+	td.LastCode = req.TOTPCode
 	td.Secret = td.PendingSecret
 	td.PendingSecret = ""
 	td.Enabled = true
@@ -115,6 +121,10 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 	td, err := s.getTOTPData(pending.Username)
 	if err != nil || !td.Enabled {
 		return api.Response{Success: false, Message: "El usuario no tiene TOTP activo"}
+	}
+
+	if td.LastCode == req.TOTPCode {
+		return api.Response{Success: false, Message: "Codigo ya utilizado"}
 	}
 
 	if !utils.VerifyTOTPCode(td.Secret, req.TOTPCode, time.Now()) {
@@ -144,6 +154,9 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 	if err := s.db.Put("sessions", []byte(pending.Username), data); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar sesión"}
 	}
+
+	td.LastCode = req.TOTPCode
+	s.saveTOTPData(pending.Username, td)
 
 	return api.Response{Success: true, Message: "Login completo", Token: token, TOTPEnabled: true}
 }
