@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-func NewRamdomToken(size int) (string, error) {
+func NewRandomToken(size int) (string, error) {
 	buf := make([]byte, size)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("no se pudo generar un token aleatorio")

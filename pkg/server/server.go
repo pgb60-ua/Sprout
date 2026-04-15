@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"sprout/pkg/api"
@@ -22,8 +23,10 @@ import (
 
 // server encapsula el estado de nuestro servidor
 type server struct {
-	db  store.Store // base de datos
-	log *log.Logger // logger para mensajes de error e información
+	db            store.Store // base de datos
+	log           *log.Logger // logger para mensajes de error e información
+	mu            sync.Mutex  // Para exclusion a la hora de lectura y escritura
+	loginAttempts map[string]*loginAttempt
 }
 
 type session struct {
@@ -32,7 +35,7 @@ type session struct {
 }
 
 const sessionDuration = 24 * time.Hour
-const lenthToken = 16
+const lengthToken = 16
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -50,8 +53,9 @@ func Run() error {
 
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
-		db:  db,
-		log: log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		db:            db,
+		log:           log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		loginAttempts: make(map[string]*loginAttempt),
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -152,7 +156,6 @@ func (s *server) registerUser(req api.Request) api.Response {
 	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(req.Username)
 	if err != nil {
-		utils.VerifyPassword(req.Password, utils.DummyHash)
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
 	}
 	if exists {
@@ -183,25 +186,35 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 
+	if err := utils.ValidateUsername(req.Username); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
+	if err := s.CheckLoginAllowed(req.Username); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
 	// Recogemos la contraseña guardada en 'auth'
 	storedPass, err := s.db.Get("auth", []byte(req.Username))
 	if err != nil {
-		return api.Response{Success: false, Message: "Usuario no encontrado"}
+		utils.VerifyPassword(req.Password, utils.DummyHash)
+		s.RegisterLoginFailure(req.Username)
+		return api.Response{Success: false, Message: "Credenciales invalidos"}
 	}
 
 	// Comparamos
 	valid, err := utils.VerifyPassword(req.Password, string(storedPass))
-	if err != nil {
-		return api.Response{Success: false, Message: fmt.Sprintf("Error al verificar la contraseña: %v", err)}
-	}
-	if !valid {
+	if err != nil || !valid {
+		s.RegisterLoginFailure(req.Username)
 		return api.Response{Success: false, Message: "Credenciales invalidos"}
 	}
 
+	s.ClearLoginFailures(req.Username)
+
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token, err := utils.NewRamdomToken(lenthToken)
+	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
-		return api.Response{Success: false, Message: "No se puedo crear un token"}
+		return api.Response{Success: false, Message: "No se pudo crear un token"}
 	}
 
 	sess := session{
