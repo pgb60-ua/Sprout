@@ -13,6 +13,7 @@ const (
 	ActionTOTPSetup   = "totpSetup"
 	ActionTOTPConfirm = "totpConfirm"
 	ActionLoginTOTP   = "loginTOTP"
+	ActionTOTPDisable = "totpDisable"
 
 	// File and folder management actions
 	ActionCreateFile = "createFile"

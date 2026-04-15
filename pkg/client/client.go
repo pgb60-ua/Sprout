@@ -68,7 +68,7 @@ func (c *client) runLoop() {
 		} else {
 			totpOption := "Activar TOTP"
 			if c.totpEnabled {
-				totpOption = "Reactivar TOTP"
+				totpOption = "Gestionar TOTP"
 			}
 
 			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
@@ -106,7 +106,7 @@ func (c *client) runLoop() {
 			case 2:
 				c.updateData()
 			case 3:
-				c.setupTOTP()
+				c.manageTOTP()
 			case 4:
 				c.fileManagerMenu()
 			case 5:
@@ -470,6 +470,29 @@ func (c *client) fileManagerMenu() {
 	}
 }
 
+func (c *client) manageTOTP() {
+	ui.ClearScreen()
+
+	// Si no tiene el totp activo
+	if !c.totpEnabled {
+		c.setupTOTP()
+		return
+	}
+
+	// Si tiene totp
+	choice := ui.PrintMenu("Gestión TOTP", []string{
+		"Reactivar TOTP",
+		"Desactivar TOTP",
+	})
+
+	switch choice {
+	case 1:
+		c.setupTOTP()
+	case 2:
+		c.disableTOTP()
+	}
+}
+
 func (c *client) setupTOTP() {
 	ui.ClearScreen()
 	fmt.Println("** Activar TOTP **")
@@ -536,7 +559,27 @@ func (c *client) setupTOTP() {
 		fmt.Println("Mensaje:", confirmRes.Message)
 		if confirmRes.Success {
 			c.totpEnabled = true
+			fmt.Println("TOTP activado correctamente")
 			return
 		}
+	}
+}
+
+func (c *client) disableTOTP() {
+	ui.ClearScreen()
+	fmt.Println("** Desactivar TOTP **")
+
+	code := ui.ReadInput("Introduce tu código TOTP actual para confirmar")
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionTOTPDisable,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		TOTPCode: code,
+	})
+
+	fmt.Println("Mensaje:", res.Message)
+	if res.Success {
+		c.totpEnabled = false
+		fmt.Println("TOTP desactivado correctamente")
 	}
 }

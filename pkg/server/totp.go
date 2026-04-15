@@ -147,3 +147,28 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 
 	return api.Response{Success: true, Message: "Login completo", Token: token, TOTPEnabled: true}
 }
+
+func (s *server) totpDisable(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+
+	td, err := s.getTOTPData(req.Username)
+	if err != nil || !td.Enabled {
+		return api.Response{Success: false, Message: "No tienes TOTP activo"}
+	}
+
+	// Pido el codigo actual para confirmar que es el usuario
+	if !utils.VerifyTOTPCode(td.Secret, req.TOTPCode, time.Now()) {
+		return api.Response{Success: false, Message: "Codigo TOTP incorrecto"}
+	}
+
+	td.Enabled = false
+	td.Secret = ""
+	td.PendingSecret = ""
+	if err := s.saveTOTPData(req.Username, td); err != nil {
+		return api.Response{Success: false, Message: "Error al desactivar TOTP"}
+	}
+
+	return api.Response{Success: true, Message: "TOTP desactivado correctamente"}
+}

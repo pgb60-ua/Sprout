@@ -138,6 +138,8 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.loginTOTP(req)
 	case api.ActionTOTPConfirm:
 		res = s.tOTPConfirm(req)
+	case api.ActionTOTPDisable:
+		res = s.totpDisable(req)
 	default:
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
