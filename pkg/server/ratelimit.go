@@ -46,6 +46,10 @@ func (s *server) RegisterLoginFailure(username string) {
 	// Uso defer para que se ejecute siempre que se salga de la funcion da igual como me salga
 	defer s.mu.Unlock()
 
+	if s.loginAttempts == nil {
+		s.loginAttempts = make(map[string]*loginAttempt)
+	}
+
 	now := time.Now()
 	attempt, ok := s.loginAttempts[username]
 
@@ -55,7 +59,7 @@ func (s *server) RegisterLoginFailure(username string) {
 	}
 
 	attempt.Count++
-	if attempt.Count > maxLoginAttempts {
+	if attempt.Count >= maxLoginAttempts {
 		attempt.BlockedTo = now.Add(loginBlockTime)
 		attempt.Count = 0
 		attempt.FirstTry = now

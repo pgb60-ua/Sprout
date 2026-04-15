@@ -35,7 +35,7 @@ type session struct {
 }
 
 const sessionDuration = 24 * time.Hour
-const lenthToken = 16
+const lengthToken = 16
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -212,7 +212,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 	s.ClearLoginFailures(req.Username)
 
 	// Generamos un nuevo token, lo guardamos en 'sessions'
-	token, err := utils.NewRandomToken(lenthToken)
+	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
 		return api.Response{Success: false, Message: "No se pudo crear un token"}
 	}
