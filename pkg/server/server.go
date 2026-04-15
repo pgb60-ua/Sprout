@@ -27,6 +27,7 @@ type server struct {
 	log           *log.Logger // logger para mensajes de error e información
 	mu            sync.Mutex  // Para exclusion a la hora de lectura y escritura
 	loginAttempts map[string]*loginAttempt
+	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
 }
 
 type session struct {
@@ -36,6 +37,7 @@ type session struct {
 
 const sessionDuration = 24 * time.Hour
 const lengthToken = 16
+const temporalTokenDuration = 2 * time.Minute
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -56,6 +58,7 @@ func Run() error {
 		db:            db,
 		log:           log.New(os.Stdout, "[srv] ", log.LstdFlags),
 		loginAttempts: make(map[string]*loginAttempt),
+		pendingTOTP:   make(map[string]pendingTOTPLogin),
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -113,6 +116,7 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.updateData(req)
 	case api.ActionLogout:
 		res = s.logoutUser(req)
+	// FILES
 	case api.ActionCreateFile:
 		res = s.createFile(req)
 	case api.ActionDeleteFile:
@@ -127,6 +131,15 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.deleteDir(req)
 	case api.ActionListFiles:
 		res = s.listFiles(req)
+	// TOTP
+	case api.ActionTOTPSetup:
+		res = s.tOTPSetup(req)
+	case api.ActionLoginTOTP:
+		res = s.loginTOTP(req)
+	case api.ActionTOTPConfirm:
+		res = s.tOTPConfirm(req)
+	case api.ActionTOTPDisable:
+		res = s.totpDisable(req)
 	default:
 		res = api.Response{Success: false, Message: "Acción desconocida"}
 	}
@@ -211,6 +224,28 @@ func (s *server) loginUser(req api.Request) api.Response {
 
 	s.ClearLoginFailures(req.Username)
 
+	// Compruebo si tiene TOTP activo
+	td, err := s.getTOTPData(req.Username)
+	if err == nil && td.Enabled {
+		tempToken, err := utils.NewRandomToken(lengthToken)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar token temporal"}
+		}
+		s.mu.Lock()
+		s.pendingTOTP[tempToken] = pendingTOTPLogin{
+			Username:  req.Username,
+			ExpiresAt: time.Now().Add(temporalTokenDuration),
+		}
+		s.mu.Unlock()
+		return api.Response{
+			Success:      true,
+			Message:      "Contraseña correcta, introduce el codigo TOTP",
+			RequiresTOTP: true,
+			TempToken:    tempToken,
+		}
+	}
+
+	//Sin TOTP - creo la sesion
 	// Generamos un nuevo token, lo guardamos en 'sessions'
 	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
@@ -231,7 +266,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al crear sesión"}
 	}
 
-	return api.Response{Success: true, Message: "Login exitoso", Token: token}
+	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
 }
 
 // fetchData verifica el token y retorna el contenido del namespace 'userdata'.
