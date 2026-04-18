@@ -1,5 +1,5 @@
-// El paquete server contiene el código del servidor.
-// Interactúa con el cliente mediante una API JSON/HTTP
+// El paquete server contiene el codigo del servidor.
+// Interactua con el cliente mediante una API JSON/HTTP
 package server
 
 import (
@@ -24,10 +24,11 @@ import (
 // server encapsula el estado de nuestro servidor
 type server struct {
 	db            store.Store // base de datos
-	log           *log.Logger // logger para mensajes de error e información
+	log           *log.Logger // logger para mensajes de error e informacion
 	mu            sync.Mutex  // Para exclusion a la hora de lectura y escritura
 	loginAttempts map[string]*loginAttempt
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
+	sessionKeys   map[string][]byte
 }
 
 type session struct {
@@ -41,7 +42,6 @@ const temporalTokenDuration = 2 * time.Minute
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
-
 	// Crear la carpeta 'data' en caso de que no exista.
 	if err := os.MkdirAll("data", 0755); err != nil {
 		return fmt.Errorf("error creando la carpeta 'data': %w", err)
@@ -59,6 +59,7 @@ func Run() error {
 		log:           log.New(os.Stdout, "[srv] ", log.LstdFlags),
 		loginAttempts: make(map[string]*loginAttempt),
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
+		sessionKeys:   make(map[string][]byte),
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -78,18 +79,16 @@ func Run() error {
 }
 
 // apiHandler decodifica la solicitud JSON, la despacha
-// a la función correspondiente y devuelve la respuesta JSON.
+// a la funcion correspondiente y devuelve la respuesta JSON.
 func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
+		http.Error(w, "Metodo no permitido", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Limitamos el tamaño del body para evitar sorpresas.
-	// (No es una medida de seguridad "de verdad"; sólo robustez.)
+	// Limitamos el tamano del body para evitar sorpresas.
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 
-	// Decodificamos la solicitud en una estructura api.Request
 	var req api.Request
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -97,13 +96,11 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
-	// Evitamos que se enví­en múltiples objetos JSON concatenados.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
 
-	// Despacho según la acción solicitada
 	var res api.Response
 	switch req.Action {
 	case api.ActionRegister:
@@ -141,19 +138,15 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	case api.ActionTOTPDisable:
 		res = s.totpDisable(req)
 	default:
-		res = api.Response{Success: false, Message: "Acción desconocida"}
+		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
 
-	// Enviamos la respuesta en formato JSON
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
 }
 
 // registerUser registra un nuevo usuario, si no existe.
-// - Guardamos la contraseña en el namespace 'auth'
-// - Creamos entrada vací­a en 'userdata' para el usuario
 func (s *server) registerUser(req api.Request) api.Response {
-	// Validación básica
 	if req.Username == "" || req.Password == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
@@ -166,7 +159,6 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
-	// Verificamos si ya existe el usuario en 'auth'
 	exists, err := s.userExists(req.Username)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al verificar usuario"}
@@ -177,23 +169,40 @@ func (s *server) registerUser(req api.Request) api.Response {
 
 	hash, err := utils.HashPassword(req.Password)
 	if err != nil {
-		return api.Response{Success: false, Message: fmt.Sprintf("Error al hashear contraseña: %v", err)}
+		return api.Response{Success: false, Message: fmt.Sprintf("Error al hashear contrasena: %v", err)}
 	}
 
-	// Almacenamos la contraseña en el namespace 'auth' (clave=nombre, valor=contraseña)
+	cryptoMeta, dek, err := generateUserCryptoMetadata(req.Password)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al inicializar cifrado del usuario"}
+	}
+
+	cryptoMetaBytes, err := json.Marshal(cryptoMeta)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al serializar cifrado del usuario"}
+	}
+
 	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar credenciales"}
 	}
 
-	// Creamos una entrada vací­a para los datos en 'userdata'
-	if err := s.db.Put("userdata", []byte(req.Username), []byte("")); err != nil {
+	if err := s.db.Put(cryptoNamespace, []byte(req.Username), cryptoMetaBytes); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
+	}
+
+	encryptedUserdata, err := encryptUserdata(dek, []byte(""))
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al cifrar datos iniciales del usuario"}
+	}
+
+	if err := s.db.Put("userdata", []byte(req.Username), encryptedUserdata); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
 }
 
-// loginUser valida credenciales en el namespace 'auth' y genera un token en 'sessions'.
+// loginUser valida credenciales y desbloquea la clave en memoria.
 func (s *server) loginUser(req api.Request) api.Response {
 	if req.Username == "" || req.Password == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
@@ -207,7 +216,6 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
-	// Recogemos la contraseña guardada en 'auth'
 	storedPass, err := s.db.Get("auth", []byte(req.Username))
 	if err != nil {
 		utils.VerifyPassword(req.Password, utils.DummyHash)
@@ -215,11 +223,20 @@ func (s *server) loginUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Credenciales invalidos"}
 	}
 
-	// Comparamos
 	valid, err := utils.VerifyPassword(req.Password, string(storedPass))
 	if err != nil || !valid {
 		s.RegisterLoginFailure(req.Username)
 		return api.Response{Success: false, Message: "Credenciales invalidos"}
+	}
+
+	cryptoMetaBytes, err := s.db.Get(cryptoNamespace, []byte(req.Username))
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al recuperar credenciales criptograficas"}
+	}
+
+	dek, err := unwrapUserDEK(req.Password, cryptoMetaBytes)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al desbloquear los datos del usuario"}
 	}
 
 	s.ClearLoginFailures(req.Username)
@@ -237,6 +254,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 			ExpiresAt: time.Now().Add(temporalTokenDuration),
 		}
 		s.mu.Unlock()
+		s.storeSessionKey(req.Username, dek)
 		return api.Response{
 			Success:      true,
 			Message:      "Contraseña correcta, introduce el codigo TOTP",
@@ -263,78 +281,92 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	if err := s.db.Put("sessions", []byte(req.Username), []byte(data)); err != nil {
-		return api.Response{Success: false, Message: "Error al crear sesión"}
+		return api.Response{Success: false, Message: "Error al crear sesion"}
 	}
 
+	s.storeSessionKey(req.Username, dek)
+	
 	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
 }
 
-// fetchData verifica el token y retorna el contenido del namespace 'userdata'.
+// fetchData verifica el token y retorna el contenido descifrado.
 func (s *server) fetchData(req api.Request) api.Response {
-	// Chequeo de credenciales
 	if req.Username == "" || req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
 	}
 
-	// Obtenemos los datos asociados al usuario desde 'userdata'
 	rawData, err := s.db.Get("userdata", []byte(req.Username))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener datos del usuario"}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
+	}
+
+	plaintext, err := decryptUserdata(dek, rawData)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al descifrar datos del usuario"}
+	}
+
 	return api.Response{
 		Success: true,
 		Message: "Datos privados de " + req.Username,
-		Data:    string(rawData),
+		Data:    string(plaintext),
 	}
 }
 
-// updateData cambia el contenido de 'userdata' (los "datos" del usuario)
-// después de validar el token.
+// updateData cifra y actualiza los datos privados del usuario.
 func (s *server) updateData(req api.Request) api.Response {
-	// Chequeo de credenciales
 	if req.Username == "" || req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
 	}
 
-	// Escribimos el nuevo dato en 'userdata'
-	if err := s.db.Put("userdata", []byte(req.Username), []byte(req.Data)); err != nil {
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
+	}
+
+	encrypted, err := encryptUserdata(dek, []byte(req.Data))
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al cifrar datos del usuario"}
+	}
+
+	if err := s.db.Put("userdata", []byte(req.Username), encrypted); err != nil {
 		return api.Response{Success: false, Message: "Error al actualizar datos del usuario"}
 	}
 
 	return api.Response{Success: true, Message: "Datos de usuario actualizados"}
 }
 
-// logoutUser borra la sesión en 'sessions', invalidando el token.
+// logoutUser borra la sesion y la clave en memoria.
 func (s *server) logoutUser(req api.Request) api.Response {
-	// Chequeo de credenciales
 	if req.Username == "" || req.Token == "" {
 		return api.Response{Success: false, Message: "Faltan credenciales"}
 	}
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada", SessionExpired: true}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
 	}
 
-	// Borramos la entrada en 'sessions'
 	if err := s.db.Delete("sessions", []byte(req.Username)); err != nil {
-		return api.Response{Success: false, Message: "Error al cerrar sesión"}
+		return api.Response{Success: false, Message: "Error al cerrar sesion"}
 	}
 
-	return api.Response{Success: true, Message: "Sesión cerrada correctamente"}
+	s.clearSessionKey(req.Username)
+	return api.Response{Success: true, Message: "Sesion cerrada correctamente"}
 }
 
-// userExists comprueba si existe un usuario con la clave 'username'
-// en 'auth'. Si no se encuentra, retorna false.
+// userExists comprueba si existe un usuario en 'auth'.
 func (s *server) userExists(username string) (bool, error) {
 	_, err := s.db.Get("auth", []byte(username))
 	if err != nil {
-		// Si no existe namespace o la clave, no es un error "real".
 		if errors.Is(err, store.ErrNamespaceNotFound) || errors.Is(err, store.ErrKeyNotFound) {
 			return false, nil
 		}
@@ -343,8 +375,7 @@ func (s *server) userExists(username string) (bool, error) {
 	return true, nil
 }
 
-// isTokenValid comprueba que el token almacenado en 'sessions'
-// coincida con el token proporcionado.
+// isTokenValid comprueba que el token almacenado coincida con el proporcionado.
 func (s *server) isTokenValid(username, token string) bool {
 	storedSession, err := s.db.Get("sessions", []byte(username))
 	if err != nil {
@@ -357,14 +388,14 @@ func (s *server) isTokenValid(username, token string) bool {
 	}
 
 	if time.Now().After(sess.ExpiresAt) {
-		s.db.Delete("sessions", []byte(username))
+		_ = s.db.Delete("sessions", []byte(username))
+		s.clearSessionKey(username)
 		return false
 	}
 	return sess.Token == token
 }
 
 // safePath valida el path para evitar Path Traversal.
-// Restringe el acceso unicamente al directorio asignado para el usuario en data/files/<username>.
 func (s *server) safePath(username, reqPath string) (string, error) {
 	baseDir := filepath.Join("data", "files", username)
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
@@ -381,16 +412,15 @@ func (s *server) safePath(username, reqPath string) (string, error) {
 		return "", err
 	}
 
-	// Prevenir path traversal
 	if !strings.HasPrefix(targetPathAbs, baseDirAbs) {
-		return "", errors.New("acceso denegado o path inválido")
+		return "", errors.New("acceso denegado o path invalido")
 	}
 	return targetPathAbs, nil
 }
 
 func (s *server) createFile(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
@@ -400,17 +430,26 @@ func (s *server) createFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
-	err = os.WriteFile(path, []byte(req.Data), 0644)
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+
+	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
+		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
+	}
+
+	if err := os.WriteFile(path, encrypted, 0644); err != nil {
 		return api.Response{Success: false, Message: "Error al crear el fichero"}
 	}
 
-	return api.Response{Success: true, Message: "Fichero creado con éxito"}
+	return api.Response{Success: true, Message: "Fichero creado con exito"}
 }
 
 func (s *server) deleteFile(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
@@ -429,12 +468,12 @@ func (s *server) deleteFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al borrar fichero"}
 	}
 
-	return api.Response{Success: true, Message: "Fichero borrado con éxito"}
+	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
 
 func (s *server) modifyFile(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
@@ -449,17 +488,26 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
 	}
 
-	err = os.WriteFile(path, []byte(req.Data), 0644)
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+
+	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
+		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
+	}
+
+	if err := os.WriteFile(path, encrypted, 0644); err != nil {
 		return api.Response{Success: false, Message: "Error al modificar el fichero"}
 	}
 
-	return api.Response{Success: true, Message: "Fichero modificado con éxito"}
+	return api.Response{Success: true, Message: "Fichero modificado con exito"}
 }
 
 func (s *server) readFile(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
@@ -469,17 +517,27 @@ func (s *server) readFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al leer el fichero"}
 	}
 
-	return api.Response{Success: true, Message: "Fichero leído con éxito", Data: string(data)}
+	plaintext, err := decryptFileData(dek, req.Path, data)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al descifrar el fichero"}
+	}
+
+	return api.Response{Success: true, Message: "Fichero leido con exito", Data: string(plaintext)}
 }
 
 func (s *server) createDir(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del directorio"}
@@ -489,17 +547,16 @@ func (s *server) createDir(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
-	err = os.MkdirAll(path, 0755)
-	if err != nil {
+	if err := os.MkdirAll(path, 0755); err != nil {
 		return api.Response{Success: false, Message: "Error al crear el directorio"}
 	}
 
-	return api.Response{Success: true, Message: "Directorio creado con éxito"}
+	return api.Response{Success: true, Message: "Directorio creado con exito"}
 }
 
 func (s *server) deleteDir(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del directorio"}
@@ -518,12 +575,12 @@ func (s *server) deleteDir(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al borrar directorio"}
 	}
 
-	return api.Response{Success: true, Message: "Directorio borrado con éxito"}
+	return api.Response{Success: true, Message: "Directorio borrado con exito"}
 }
 
 func (s *server) listFiles(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
-		return api.Response{Success: false, Message: "Token inválido o sesión expirada"}
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 
 	path, err := s.safePath(req.Username, req.Path)
@@ -535,7 +592,7 @@ func (s *server) listFiles(req api.Request) api.Response {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return api.Response{Success: true, Message: "Directorio vacío", Files: []string{}}
+			return api.Response{Success: true, Message: "Directorio vacio", Files: []string{}}
 		}
 		return api.Response{Success: false, Message: "Error al listar ficheros"}
 	}
@@ -549,4 +606,43 @@ func (s *server) listFiles(req api.Request) api.Response {
 	}
 
 	return api.Response{Success: true, Message: "Listado correcto", Files: files}
+}
+
+func (s *server) storeSessionKey(username string, dek []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sessionKeys == nil {
+		s.sessionKeys = make(map[string][]byte)
+	}
+
+	keyCopy := make([]byte, len(dek))
+	copy(keyCopy, dek)
+	s.sessionKeys[username] = keyCopy
+}
+
+func (s *server) getSessionKey(username string) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dek, ok := s.sessionKeys[username]
+	if !ok {
+		return nil, false
+	}
+
+	keyCopy := make([]byte, len(dek))
+	copy(keyCopy, dek)
+	return keyCopy, true
+}
+
+func (s *server) clearSessionKey(username string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if dek, ok := s.sessionKeys[username]; ok {
+		for i := range dek {
+			dek[i] = 0
+		}
+		delete(s.sessionKeys, username)
+	}
 }
