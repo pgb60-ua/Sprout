@@ -13,9 +13,11 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"sprout/pkg/client"
+	"sprout/pkg/remoteservice"
 	"sprout/pkg/server"
 	"sprout/pkg/ui"
 )
@@ -25,6 +27,15 @@ func main() {
 	// Creamos un logger con prefijo 'main' para identificar
 	// los mensajes en la consola.
 	log := log.New(os.Stdout, "[main] ", log.LstdFlags)
+
+	ensureRemoteDefaults(log)
+
+	log.Println("Iniciando servicio remoto de logs/backups...")
+	go func() {
+		if err := remoteservice.Run(); err != nil {
+			log.Fatalf("Error del servicio remoto: %v\n", err)
+		}
+	}()
 
 	// Inicia servidor en goroutine.
 	log.Println("Iniciando servidor...")
@@ -44,4 +55,39 @@ func main() {
 	// Inicia cliente.
 	log.Println("Iniciando cliente...")
 	client.Run()
+}
+
+func ensureRemoteDefaults(logger *log.Logger) {
+	remoteAddr := os.Getenv("SPROUT_REMOTE_SERVICE_ADDR")
+	if remoteAddr == "" {
+		remoteAddr = ":8081"
+		_ = os.Setenv("SPROUT_REMOTE_SERVICE_ADDR", remoteAddr)
+	}
+
+	if os.Getenv("SPROUT_REMOTE_SERVICE_TOKEN") == "" {
+		_ = os.Setenv("SPROUT_REMOTE_SERVICE_TOKEN", "token-sprout")
+	}
+
+	baseURL := normalizeLocalURL(remoteAddr)
+	if os.Getenv("SPROUT_REMOTE_LOG_URL") == "" {
+		_ = os.Setenv("SPROUT_REMOTE_LOG_URL", baseURL+"/logs")
+	}
+	if os.Getenv("SPROUT_REMOTE_BACKUP_URL") == "" {
+		_ = os.Setenv("SPROUT_REMOTE_BACKUP_URL", baseURL+"/backups")
+	}
+
+	logger.Printf("servicio remoto configurado en %s", baseURL)
+}
+
+func normalizeLocalURL(addr string) string {
+	if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
+		return strings.TrimRight(addr, "/")
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	if strings.Contains(addr, ":") {
+		return "http://" + addr
+	}
+	return "http://localhost:" + addr
 }

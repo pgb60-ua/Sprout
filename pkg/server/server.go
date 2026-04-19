@@ -25,6 +25,8 @@ import (
 type server struct {
 	db            store.Store // base de datos
 	log           *log.Logger // logger para mensajes de error e información
+	remoteLog     *remoteLogger
+	remoteBackup  *remoteBackupSender
 	mu            sync.Mutex  // Para exclusion a la hora de lectura y escritura
 	loginAttempts map[string]*loginAttempt
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
@@ -38,6 +40,9 @@ type session struct {
 const sessionDuration = 24 * time.Hour
 const lengthToken = 16
 const temporalTokenDuration = 2 * time.Minute
+const defaultRemoteLogEndpointEnv = "SPROUT_REMOTE_LOG_URL"
+const defaultRemoteBackupEndpointEnv = "SPROUT_REMOTE_BACKUP_URL"
+const defaultRemoteServiceTokenEnv = "SPROUT_REMOTE_SERVICE_TOKEN"
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -53,16 +58,29 @@ func Run() error {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
 
-	// Creamos nuestro servidor con su logger con prefijo 'srv'
+	// Creamos nuestro servidor con su logger con prefijo 'srv'.
+	remoteToken := os.Getenv(defaultRemoteServiceTokenEnv)
+	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), remoteToken, log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
+	remoteBackup := newRemoteBackupSenderFromEnv(
+		os.Getenv(defaultRemoteBackupEndpointEnv),
+		remoteToken,
+		"data/server.db",
+		filepath.Join("data", "files"),
+		log.New(os.Stdout, "[srv-backup] ", log.LstdFlags),
+	)
 	srv := &server{
 		db:            db,
 		log:           log.New(os.Stdout, "[srv] ", log.LstdFlags),
+		remoteLog:     remoteLog,
+		remoteBackup:  remoteBackup,
 		loginAttempts: make(map[string]*loginAttempt),
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
 	}
 
 	// Al terminar, cerramos la base de datos
 	defer srv.db.Close()
+	defer srv.closeRemoteLog()
+	defer srv.closeRemoteBackup()
 
 	// Construimos un mux y asociamos /api a nuestro apiHandler,
 	mux := http.NewServeMux()
@@ -77,10 +95,18 @@ func Run() error {
 	return httpSrv.ListenAndServe()
 }
 
+func (s *server) closeRemoteBackup() {
+	if s == nil || s.remoteBackup == nil {
+		return
+	}
+	s.remoteBackup.Close()
+}
+
 // apiHandler decodifica la solicitud JSON, la despacha
 // a la función correspondiente y devuelve la respuesta JSON.
 func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		s.logHTTPReject("invalid_method", r.RemoteAddr, "Método no permitido")
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
@@ -94,11 +120,13 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		s.logHTTPReject("invalid_json", r.RemoteAddr, "Error en el formato JSON")
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
 	// Evitamos que se enví­en múltiples objetos JSON concatenados.
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		s.logHTTPReject("invalid_json", r.RemoteAddr, "Error en el formato JSON")
 		http.Error(w, "Error en el formato JSON", http.StatusBadRequest)
 		return
 	}
@@ -145,8 +173,58 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Enviamos la respuesta en formato JSON
+	s.logRequestEvent(req, res, r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *server) closeRemoteLog() {
+	if s == nil || s.remoteLog == nil {
+		return
+	}
+	s.remoteLog.Close()
+}
+
+func (s *server) logHTTPReject(action, remoteAddr, message string) {
+	if s == nil || s.remoteLog == nil {
+		return
+	}
+	s.remoteLog.Enqueue(remoteLogEvent{
+		Timestamp: time.Now().UTC(),
+		Level:     "warn",
+		Action:    action,
+		Message:   message,
+		Success:   false,
+		Source:    "sprout",
+		RemoteAddr: remoteAddr,
+	})
+}
+
+func (s *server) logRequestEvent(req api.Request, res api.Response, remoteAddr string) {
+	if s == nil || s.remoteLog == nil {
+		return
+	}
+	message := res.Message
+	if message == "" {
+		message = "request processed"
+	}
+	s.remoteLog.Enqueue(remoteLogEvent{
+		Timestamp:  time.Now().UTC(),
+		Level:      logLevelForResponse(res),
+		Action:     req.Action,
+		Username:   req.Username,
+		RemoteAddr: remoteAddr,
+		Path:       req.Path,
+		Success:    res.Success,
+		Message:    message,
+	})
+}
+
+func logLevelForResponse(res api.Response) string {
+	if res.Success {
+		return "info"
+	}
+	return "warn"
 }
 
 // registerUser registra un nuevo usuario, si no existe.
