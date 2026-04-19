@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -32,6 +33,7 @@ type remoteBackupSender struct {
 	interval   time.Duration
 	local      *log.Logger
 	closed     chan struct{}
+	closeOnce  sync.Once
 	dbPath     string
 	filesRoot  string
 }
@@ -58,12 +60,9 @@ func (r *remoteBackupSender) Close() {
 	if r == nil {
 		return
 	}
-	select {
-	case <-r.closed:
-		return
-	default:
+	r.closeOnce.Do(func() {
 		close(r.closed)
-	}
+	})
 }
 
 func (r *remoteBackupSender) run() {

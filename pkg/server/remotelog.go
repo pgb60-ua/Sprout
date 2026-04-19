@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"context"
 )
 
 type remoteLogEvent struct {
@@ -81,6 +82,39 @@ func (r *remoteLogger) Close() {
 		close(r.closed)
 	})
 	r.wg.Wait()
+}
+
+func (r *remoteLogger) CloseWithTimeout(timeout time.Duration) {
+	if r == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	r.once.Do(func() {
+		for {
+			select {
+			case event := <-r.events:
+				_ = r.send(event)
+			default:
+				close(r.closed)
+				return
+			}
+		}
+	})
+	done := make(chan struct{})
+	go func() {
+		r.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+		if r.local != nil {
+			r.local.Printf("remoteLogger: cierre forzado tras timeout, puede haber eventos no enviados")
+		}
+		return
+	}
 }
 
 func (r *remoteLogger) run() {

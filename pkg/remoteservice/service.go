@@ -56,7 +56,6 @@ type service struct {
 	token   string
 }
 
-// Run inicia el servicio remoto combinado para logs y backups.
 func Run() error {
 	addr := os.Getenv(defaultAddrEnv)
 	if addr == "" {
@@ -101,7 +100,7 @@ func Run() error {
 
 func (s *service) isAuthorized(r *http.Request) bool {
 	if s.token == "" {
-		return true
+		return false
 	}
 	return r.Header.Get("X-Sprout-Token") == s.token
 }
@@ -159,7 +158,7 @@ func (s *service) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	if q := r.URL.Query().Get("limit"); q != "" {
 		value, err := strconv.Atoi(q)
 		if err != nil || value < 0 {
-			http.Error(w, "limit invalido", http.StatusBadRequest)
+			http.Error(w, "limit inválido", http.StatusBadRequest)
 			return
 		}
 		limit = value

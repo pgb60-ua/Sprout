@@ -60,7 +60,7 @@ func main() {
 func ensureRemoteDefaults(logger *log.Logger) {
 	remoteAddr := os.Getenv("SPROUT_REMOTE_SERVICE_ADDR")
 	if remoteAddr == "" {
-		remoteAddr = ":8081"
+		remoteAddr = "127.0.0.1:8081"
 		_ = os.Setenv("SPROUT_REMOTE_SERVICE_ADDR", remoteAddr)
 	}
 

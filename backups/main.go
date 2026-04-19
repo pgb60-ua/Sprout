@@ -225,7 +225,14 @@ func copyFile(src, dst string) error {
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	// Intentar obtener los permisos originales
+	fi, err := srcFile.Stat()
+	perm := os.FileMode(0600)
+	if err == nil {
+		perm = fi.Mode().Perm()
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 	if err != nil {
 		return err
 	}
@@ -239,5 +246,5 @@ func copyFile(src, dst string) error {
 		return err
 	}
 
-	return dstFile.Close()
+	return nil
 }

@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		entries, fetchErr := readLogsHTTP(*endpoint, *token, *limit)
 		if fetchErr != nil {
-			log.Fatalf("%v. y tampoco se pudieron obtener por HTTP: %v", err, fetchErr)
+			log.Fatalf("%v. %v", err, fetchErr)
 		}
 		printEntries(entries, *limit, *asJSON)
 		return
