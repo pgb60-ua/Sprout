@@ -277,19 +277,19 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 }
 
 func sanitizeRelativePath(p string) (string, error) {
-       clean := filepath.Clean(p)
-       if clean == "." || clean == string(filepath.Separator) {
-	       return "", errors.New("path vacío")
-       }
-       if filepath.IsAbs(clean) {
-	       return "", errors.New("path no permitido")
-       }
-       for _, part := range strings.Split(clean, string(filepath.Separator)) {
-	       if part == ".." {
-		       return "", errors.New("path no permitido")
-	       }
-       }
-       return clean, nil
+	clean := filepath.Clean(p)
+	if clean == "." || clean == string(filepath.Separator) {
+		return "", errors.New("path vacío")
+	}
+	if filepath.IsAbs(clean) {
+		return "", errors.New("path no permitido")
+	}
+	for _, part := range strings.Split(clean, string(filepath.Separator)) {
+		if part == ".." {
+			return "", errors.New("path no permitido")
+		}
+	}
+	return clean, nil
 }
 
 func randomSuffix() string {

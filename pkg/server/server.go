@@ -179,7 +179,7 @@ func (s *server) closeRemoteLog() {
 	if s == nil || s.remoteLog == nil {
 		return
 	}
-	s.remoteLog.Close()
+	s.remoteLog.CloseWithTimeout(5 * time.Second)
 }
 
 func (s *server) logHTTPReject(action, remoteAddr, message string) {
