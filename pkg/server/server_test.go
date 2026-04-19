@@ -15,7 +15,7 @@ import (
 	"sprout/pkg/store"
 )
 
-func newTestHTTPServer(t *testing.T) (*httptest.Server, string, string) {
+func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -45,12 +45,12 @@ func newTestHTTPServer(t *testing.T) (*httptest.Server, string, string) {
 	mux := http.NewServeMux()
 	mux.Handle("/api", http.HandlerFunc(srv.apiHandler))
 
-	ts := httptest.NewServer(mux)
+	ts := httptest.NewTLSServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, dir, dbPath
 }
 
-func postJSON(t *testing.T, url string, v any) (*http.Response, api.Response) {
+func postJSON(t *testing.T, client *http.Client, url string, v any) (*http.Response, api.Response) {
 	t.Helper()
 
 	b, err := json.Marshal(v)
@@ -58,7 +58,6 @@ func postJSON(t *testing.T, url string, v any) (*http.Response, api.Response) {
 		t.Fatalf("marshal fallo: %v", err)
 	}
 
-	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(b))
 	if err != nil {
 		t.Fatalf("POST fallo: %v", err)
@@ -71,10 +70,12 @@ func postJSON(t *testing.T, url string, v any) (*http.Response, api.Response) {
 }
 
 func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
-	ts, _, _ := newTestHTTPServer(t)
+	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
 
-	_, r1 := postJSON(t, apiURL, api.Request{
+	_, r1 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionRegister,
 		Username: "alice",
 		Password: "password123",
@@ -83,7 +84,7 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 		t.Fatalf("register fallo: %s", r1.Message)
 	}
 
-	_, r2 := postJSON(t, apiURL, api.Request{
+	_, r2 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionLogin,
 		Username: "alice",
 		Password: "password123",
@@ -92,7 +93,7 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 		t.Fatalf("login fallo: success=%v msg=%q token=%q", r2.Success, r2.Message, r2.Token)
 	}
 
-	_, r3 := postJSON(t, apiURL, api.Request{
+	_, r3 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionUpdateData,
 		Username: "alice",
 		Token:    r2.Token,
@@ -102,7 +103,7 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 		t.Fatalf("update fallo: %s", r3.Message)
 	}
 
-	_, r4 := postJSON(t, apiURL, api.Request{
+	_, r4 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionFetchData,
 		Username: "alice",
 		Token:    r2.Token,
@@ -111,7 +112,7 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 		t.Fatalf("fetch fallo: success=%v msg=%q data=%q", r4.Success, r4.Message, r4.Data)
 	}
 
-	_, r5 := postJSON(t, apiURL, api.Request{
+	_, r5 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionLogout,
 		Username: "alice",
 		Token:    r2.Token,
@@ -120,7 +121,7 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 		t.Fatalf("logout fallo: %s", r5.Message)
 	}
 
-	_, r6 := postJSON(t, apiURL, api.Request{
+	_, r6 := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionFetchData,
 		Username: "alice",
 		Token:    r2.Token,
@@ -131,11 +132,12 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 }
 
 func TestServer_UnknownFieldRejected(t *testing.T) {
-	ts, _, _ := newTestHTTPServer(t)
+	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
 
 	raw := []byte(`{"action":"register","username":"usuario","password":"password123","nope":123}`)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := ts.Client()
+	client.Timeout = 2 * time.Second
 	resp, err := client.Post(apiURL, "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("POST fallo: %v", err)
@@ -148,11 +150,12 @@ func TestServer_UnknownFieldRejected(t *testing.T) {
 }
 
 func TestServer_RejectsTrailingJSON(t *testing.T) {
-	ts, _, _ := newTestHTTPServer(t)
+	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
 
 	raw := []byte(`{"action":"register","username":"usuario","password":"password123"} {"action":"login"}`)
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := ts.Client()
+	client.Timeout = 2 * time.Second
 	resp, err := client.Post(apiURL, "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("POST fallo: %v", err)
@@ -165,10 +168,12 @@ func TestServer_RejectsTrailingJSON(t *testing.T) {
 }
 
 func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
-	ts, dir, dbPath := newTestHTTPServer(t)
+	ts, dir, dbPath := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
 
-	_, registerRes := postJSON(t, apiURL, api.Request{
+	_, registerRes := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionRegister,
 		Username: "alice",
 		Password: "password123",
@@ -177,7 +182,7 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 		t.Fatalf("register fallo: %s", registerRes.Message)
 	}
 
-	_, loginRes := postJSON(t, apiURL, api.Request{
+	_, loginRes := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionLogin,
 		Username: "alice",
 		Password: "password123",
@@ -186,7 +191,7 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 		t.Fatalf("login fallo: %s", loginRes.Message)
 	}
 
-	_, updateRes := postJSON(t, apiURL, api.Request{
+	_, updateRes := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionUpdateData,
 		Username: "alice",
 		Token:    loginRes.Token,
@@ -196,7 +201,7 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 		t.Fatalf("update fallo: %s", updateRes.Message)
 	}
 
-	_, createRes := postJSON(t, apiURL, api.Request{
+	_, createRes := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionCreateFile,
 		Username: "alice",
 		Token:    loginRes.Token,
@@ -223,7 +228,7 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 		t.Fatalf("el contenido del fichero quedo en claro en disco")
 	}
 
-	_, readRes := postJSON(t, apiURL, api.Request{
+	_, readRes := postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionReadFile,
 		Username: "alice",
 		Token:    loginRes.Token,
