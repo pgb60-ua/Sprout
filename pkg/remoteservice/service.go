@@ -20,7 +20,6 @@ import (
 const (
 	defaultAddrEnv       = "SPROUT_REMOTE_SERVICE_ADDR"
 	defaultDataDirEnv    = "SPROUT_REMOTE_SERVICE_DATA_DIR"
-	defaultTokenEnv      = "SPROUT_REMOTE_SERVICE_TOKEN"
 	defaultListenAddress = ":8081"
 	defaultDataDir       = "data/remote"
 )
@@ -53,7 +52,6 @@ type service struct {
 	log     *log.Logger
 	db      store.Store
 	baseDir string
-	token   string
 }
 
 func Run() error {
@@ -80,7 +78,6 @@ func Run() error {
 		log:     log.New(os.Stdout, "[remote] ", log.LstdFlags),
 		db:      db,
 		baseDir: baseDir,
-		token:   os.Getenv(defaultTokenEnv),
 	}
 	defer s.db.Close()
 
@@ -99,10 +96,7 @@ func Run() error {
 }
 
 func (s *service) isAuthorized(r *http.Request) bool {
-	if s.token == "" {
-		return false
-	}
-	return r.Header.Get("X-Sprout-Token") == s.token
+	return true
 }
 
 func (s *service) handleLogs(w http.ResponseWriter, r *http.Request) {

@@ -64,10 +64,6 @@ func ensureRemoteDefaults(logger *log.Logger) {
 		_ = os.Setenv("SPROUT_REMOTE_SERVICE_ADDR", remoteAddr)
 	}
 
-	if os.Getenv("SPROUT_REMOTE_SERVICE_TOKEN") == "" {
-		_ = os.Setenv("SPROUT_REMOTE_SERVICE_TOKEN", "token-sprout")
-	}
-
 	baseURL := normalizeLocalURL(remoteAddr)
 	if os.Getenv("SPROUT_REMOTE_LOG_URL") == "" {
 		_ = os.Setenv("SPROUT_REMOTE_LOG_URL", baseURL+"/logs")

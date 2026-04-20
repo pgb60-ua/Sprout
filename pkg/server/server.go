@@ -43,7 +43,6 @@ const lengthToken = 16
 const temporalTokenDuration = 2 * time.Minute
 const defaultRemoteLogEndpointEnv = "SPROUT_REMOTE_LOG_URL"
 const defaultRemoteBackupEndpointEnv = "SPROUT_REMOTE_BACKUP_URL"
-const defaultRemoteServiceTokenEnv = "SPROUT_REMOTE_SERVICE_TOKEN"
 
 // Run inicia la base de datos y arranca el servidor HTTP.
 func Run() error {
@@ -59,11 +58,9 @@ func Run() error {
 	}
 
 	// Creamos nuestro servidor con su logger con prefijo 'srv'.
-	remoteToken := os.Getenv(defaultRemoteServiceTokenEnv)
-	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), remoteToken, log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
+	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
 	remoteBackup := newRemoteBackupSenderFromEnv(
 		os.Getenv(defaultRemoteBackupEndpointEnv),
-		remoteToken,
 		"data/server.db",
 		filepath.Join("data", "files"),
 		log.New(os.Stdout, "[srv-backup] ", log.LstdFlags),

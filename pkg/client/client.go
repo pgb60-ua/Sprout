@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"sprout/pkg/api"
@@ -71,12 +72,14 @@ func (c *client) runLoop() {
 				totpOption = "Gestionar TOTP"
 			}
 
-			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
+			// Usuario activo: Ver datos, Actualizar datos, TOTP, ficheros, logs, backups, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
 				totpOption,
 				"Gestión de ficheros",
+				"Acceder a logs",
+				"Acceder a backups",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -110,8 +113,14 @@ func (c *client) runLoop() {
 			case 4:
 				c.fileManagerMenu()
 			case 5:
-				c.logoutUser()
+				c.accessRemoteLogs()
 			case 6:
+				if c.accessRemoteBackups() {
+					return
+				}
+			case 7:
+				c.logoutUser()
+			case 8:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -358,6 +367,44 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+func (c *client) accessRemoteLogs() {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a logs remotos **")
+
+	if err := c.runExternalCommand("go", "run", "./logs"); err != nil {
+		fmt.Println("No se pudieron abrir los logs remotos:", err)
+		return
+	}
+
+	fmt.Println("Visor de logs finalizado.")
+}
+
+func (c *client) accessRemoteBackups() bool {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a backups **")
+	fmt.Println("Se cerrará el programa principal para restaurar el backup.")
+
+	if !ui.Confirm("¿Quieres continuar") {
+		return false
+	}
+
+	if err := c.runExternalCommand("go", "run", "./backups"); err != nil {
+		fmt.Println("No se pudo iniciar la restauración de backups:", err)
+		return false
+	}
+
+	fmt.Println("Restaurador de backups iniciado. Cerrando el programa principal...")
+	return true
+}
+
+func (c *client) runExternalCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
 
 // fileManagerMenu permite al usuario gestionar archivos y carpetas.

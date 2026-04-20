@@ -25,7 +25,6 @@ type remoteLogEvent struct {
 
 type remoteLogger struct {
 	endpoint string
-	token    string
 	client   *http.Client
 	events   chan remoteLogEvent
 	closed   chan struct{}
@@ -34,21 +33,16 @@ type remoteLogger struct {
 	local    *log.Logger
 }
 
-func newRemoteLoggerFromEnv(endpoint, token string, local *log.Logger) *remoteLogger {
+func newRemoteLoggerFromEnv(endpoint string, local *log.Logger) *remoteLogger {
 	if endpoint == "" {
 		return nil
 	}
-	return newRemoteLoggerWithToken(endpoint, token, local)
+	return newRemoteLogger(endpoint, local)
 }
 
 func newRemoteLogger(endpoint string, local *log.Logger) *remoteLogger {
-	return newRemoteLoggerWithToken(endpoint, "", local)
-}
-
-func newRemoteLoggerWithToken(endpoint, token string, local *log.Logger) *remoteLogger {
 	rl := &remoteLogger{
 		endpoint: endpoint,
-		token:    token,
 		client:   &http.Client{Timeout: 3 * time.Second},
 		events:   make(chan remoteLogEvent, 100),
 		closed:   make(chan struct{}),
@@ -72,16 +66,6 @@ func (r *remoteLogger) Enqueue(event remoteLogEvent) {
 			r.local.Printf("cola de logging remoto llena; se descarta evento action=%s user=%s", event.Action, event.Username)
 		}
 	}
-}
-
-func (r *remoteLogger) Close() {
-	if r == nil {
-		return
-	}
-	r.once.Do(func() {
-		close(r.closed)
-	})
-	r.wg.Wait()
 }
 
 func (r *remoteLogger) CloseWithTimeout(timeout time.Duration) {
@@ -143,9 +127,6 @@ func (r *remoteLogger) send(event remoteLogEvent) error {
 		return fmt.Errorf("error construyendo request remoto: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if r.token != "" {
-		req.Header.Set("X-Sprout-Token", r.token)
-	}
 
 	resp, err := r.client.Do(req)
 	if err != nil {

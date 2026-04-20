@@ -29,14 +29,13 @@ type remoteLogEvent struct {
 func main() {
 	dbPath := flag.String("db", "data/remote/remote.db", "ruta de la bbolt remota")
 	endpoint := flag.String("endpoint", "http://localhost:8081/logs", "endpoint HTTP para leer logs en caliente")
-	token := flag.String("token", os.Getenv("SPROUT_REMOTE_SERVICE_TOKEN"), "token para cabecera X-Sprout-Token")
 	limit := flag.Int("limit", 50, "numero maximo de logs a mostrar (0 = todos)")
 	asJSON := flag.Bool("json", false, "imprime cada log como JSON crudo")
 	flag.Parse()
 
 	resolvedPath, err := resolveDBPath(*dbPath)
 	if err != nil {
-		entries, fetchErr := readLogsHTTP(*endpoint, *token, *limit)
+		entries, fetchErr := readLogsHTTP(*endpoint, *limit)
 		if fetchErr != nil {
 			log.Fatalf("%v. %v", err, fetchErr)
 		}
@@ -49,7 +48,7 @@ func main() {
 		Timeout:  1 * time.Second,
 	})
 	if err != nil {
-		entries, fetchErr := readLogsHTTP(*endpoint, *token, *limit)
+		entries, fetchErr := readLogsHTTP(*endpoint, *limit)
 		if fetchErr != nil {
 			log.Fatalf("no se pudo abrir la base de logs: %v. y tampoco se pudieron obtener por HTTP: %v", err, fetchErr)
 		}
@@ -124,7 +123,7 @@ func printEntries(entries map[string][]byte, limit int, asJSON bool) {
 	}
 }
 
-func readLogsHTTP(endpoint, token string, limit int) (map[string][]byte, error) {
+func readLogsHTTP(endpoint string, limit int) (map[string][]byte, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -134,10 +133,6 @@ func readLogsHTTP(endpoint, token string, limit int) (map[string][]byte, error) 
 	q := req.URL.Query()
 	q.Set("limit", fmt.Sprintf("%d", limit))
 	req.URL.RawQuery = q.Encode()
-
-	if token != "" {
-		req.Header.Set("X-Sprout-Token", token)
-	}
 
 	resp, err := client.Do(req)
 	if err != nil {

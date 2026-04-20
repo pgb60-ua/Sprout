@@ -28,7 +28,6 @@ type backupPayload struct {
 
 type remoteBackupSender struct {
 	endpoint   string
-	token      string
 	client     *http.Client
 	interval   time.Duration
 	local      *log.Logger
@@ -38,13 +37,12 @@ type remoteBackupSender struct {
 	filesRoot  string
 }
 
-func newRemoteBackupSenderFromEnv(endpoint, token, dbPath, filesRoot string, local *log.Logger) *remoteBackupSender {
+func newRemoteBackupSenderFromEnv(endpoint, dbPath, filesRoot string, local *log.Logger) *remoteBackupSender {
 	if endpoint == "" {
 		return nil
 	}
 	r := &remoteBackupSender{
 		endpoint:  endpoint,
-		token:     token,
 		client:    &http.Client{Timeout: 10 * time.Second},
 		interval:  defaultRemoteBackupInterval,
 		local:     local,
@@ -122,9 +120,6 @@ func (r *remoteBackupSender) sendSnapshot() error {
 		return fmt.Errorf("no se pudo crear request backup remoto: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if r.token != "" {
-		req.Header.Set("X-Sprout-Token", r.token)
-	}
 
 	resp, err := r.client.Do(req)
 	if err != nil {
