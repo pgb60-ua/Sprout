@@ -43,8 +43,6 @@ type session struct {
 const sessionDuration = 24 * time.Hour
 const lengthToken = 16
 const temporalTokenDuration = 2 * time.Minute
-const defaultRemoteLogEndpointEnv = "SPROUT_REMOTE_LOG_URL"
-const defaultRemoteBackupEndpointEnv = "SPROUT_REMOTE_BACKUP_URL"
 
 // Run inicia la base de datos y arranca el servidor HTTPS.
 func Run() error {
@@ -62,9 +60,9 @@ func Run() error {
 	}
 
 	// Creamos nuestro servidor con su logger con prefijo 'srv'.
-	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), cfg.TLSCAFile, log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
+	remoteLog := newRemoteLoggerFromEnv(cfg.RemoteLogURL, cfg.TLSCAFile, log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
 	remoteBackup := newRemoteBackupSenderFromEnv(
-		os.Getenv(defaultRemoteBackupEndpointEnv),
+		cfg.RemoteBackupURL,
 		cfg.TLSCAFile,
 		"data/server.db",
 		filepath.Join("data", "files"),

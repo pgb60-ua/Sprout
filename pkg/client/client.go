@@ -83,14 +83,13 @@ func (c *client) runLoop() {
 				totpOption = "Gestionar TOTP"
 			}
 
-			// Usuario activo: Ver datos, Actualizar datos, TOTP, ficheros, logs, backups, Logout, Salir
+			// Usuario activo: Ver datos, Actualizar datos, TOTP, ficheros, panel admin, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
 				totpOption,
 				"Gestión de ficheros",
-				"Acceder a logs",
-				"Acceder a backups",
+				"Panel de Administrador",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -124,14 +123,13 @@ func (c *client) runLoop() {
 			case 4:
 				c.fileManagerMenu()
 			case 5:
-				c.accessRemoteLogs()
-			case 6:
-				if c.accessRemoteBackups() {
+				if c.adminPanelMenu() {
 					return
 				}
-			case 7:
+				continue
+			case 6:
 				c.logoutUser()
-			case 8:
+			case 7:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -140,6 +138,32 @@ func (c *client) runLoop() {
 
 		// Pausa para que el usuario vea resultados.
 		ui.Pause("Pulsa [Enter] para continuar...")
+	}
+}
+
+func (c *client) adminPanelMenu() bool {
+	for {
+		ui.ClearScreen()
+		title := "Panel de Administrador"
+		options := []string{
+			"Acceder a logs",
+			"Acceder a backups",
+			"Volver al menú principal",
+		}
+
+		choice := ui.PrintMenu(title, options)
+		switch choice {
+		case 1:
+			c.accessRemoteLogs()
+			ui.Pause("Pulsa [Enter] para continuar...")
+		case 2:
+			if c.accessRemoteBackups() {
+				return true
+			}
+			ui.Pause("Pulsa [Enter] para continuar...")
+		case 3:
+			return false
+		}
 	}
 }
 
