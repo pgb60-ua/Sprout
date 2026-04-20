@@ -4,6 +4,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/netcfg"
 	"sprout/pkg/ui"
 
 	"github.com/skip2/go-qrcode"
@@ -27,18 +30,26 @@ type client struct {
 	authToken   string
 	totpEnabled bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
 	httpClient  *http.Client
+	apiEndpoint string
 }
 
 // Run es la única función exportada de este paquete.
 // Crea un cliente interno y ejecuta el bucle principal.
 func Run() {
+	cfg := netcfg.Load()
+
+	httpClient, err := newSecureHTTPClient(cfg.TLSCAFile)
+	if err != nil {
+		log.New(os.Stdout, "[cli] ", log.LstdFlags).Printf("No se pudo inicializar cliente HTTPS: %v\n", err)
+		return
+	}
+
 	// Creamos un logger con prefijo 'cli' para identificar
 	// los mensajes en la consola.
 	c := &client{
-		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		log:         log.New(os.Stdout, "[cli] ", log.LstdFlags),
+		httpClient:  httpClient,
+		apiEndpoint: cfg.APIEndpoint,
 	}
 	c.runLoop()
 }
@@ -339,7 +350,7 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error interno del cliente"}
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, "http://localhost:8080/api", bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequest(http.MethodPost, c.apiEndpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		c.log.Println("No se ha podido construir la petición HTTP:", err)
 		return api.Response{Success: false, Message: "Error interno del cliente"}
@@ -367,6 +378,30 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+func newSecureHTTPClient(caFile string) (*http.Client, error) {
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer la CA en %q: %w", caFile, err)
+	}
+
+	rootCAs := x509.NewCertPool()
+	if ok := rootCAs.AppendCertsFromPEM(caPEM); !ok {
+		return nil, fmt.Errorf("el fichero %q no contiene certificados PEM validos", caFile)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    rootCAs,
+		},
+	}
+
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+	}, nil
 }
 
 func (c *client) accessRemoteLogs() {

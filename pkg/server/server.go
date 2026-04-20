@@ -3,6 +3,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/netcfg"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -44,8 +46,10 @@ const temporalTokenDuration = 2 * time.Minute
 const defaultRemoteLogEndpointEnv = "SPROUT_REMOTE_LOG_URL"
 const defaultRemoteBackupEndpointEnv = "SPROUT_REMOTE_BACKUP_URL"
 
-// Run inicia la base de datos y arranca el servidor HTTP.
+// Run inicia la base de datos y arranca el servidor HTTPS.
 func Run() error {
+	cfg := netcfg.Load()
+
 	// Crear la carpeta 'data' en caso de que no exista.
 	if err := os.MkdirAll("data", 0755); err != nil {
 		return fmt.Errorf("error creando la carpeta 'data': %w", err)
@@ -86,11 +90,22 @@ func Run() error {
 
 	// Iniciamos el servidor HTTP.
 	httpSrv := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.ServerAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
 	}
-	return httpSrv.ListenAndServe()
+	if _, err := os.Stat(cfg.TLSCertFile); err != nil {
+		return fmt.Errorf("certificado TLS no disponible en %q: %w", cfg.TLSCertFile, err)
+	}
+	if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
+		return fmt.Errorf("clave TLS no disponible en %q: %w", cfg.TLSKeyFile, err)
+	}
+
+	srv.log.Printf("Servidor HTTPS escuchando en %s", cfg.ServerAddr)
+	return httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 }
 
 func (s *server) closeRemoteBackup() {
@@ -361,7 +376,7 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	s.storeSessionKey(req.Username, dek)
-	
+
 	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
 }
 
