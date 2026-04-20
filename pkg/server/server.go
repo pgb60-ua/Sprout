@@ -62,9 +62,10 @@ func Run() error {
 	}
 
 	// Creamos nuestro servidor con su logger con prefijo 'srv'.
-	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
+	remoteLog := newRemoteLoggerFromEnv(os.Getenv(defaultRemoteLogEndpointEnv), cfg.TLSCAFile, log.New(os.Stdout, "[srv-remote] ", log.LstdFlags))
 	remoteBackup := newRemoteBackupSenderFromEnv(
 		os.Getenv(defaultRemoteBackupEndpointEnv),
+		cfg.TLSCAFile,
 		"data/server.db",
 		filepath.Join("data", "files"),
 		log.New(os.Stdout, "[srv-backup] ", log.LstdFlags),

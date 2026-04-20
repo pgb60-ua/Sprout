@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -28,14 +31,15 @@ type remoteLogEvent struct {
 
 func main() {
 	dbPath := flag.String("db", "data/remote/remote.db", "ruta de la bbolt remota")
-	endpoint := flag.String("endpoint", "http://localhost:8081/logs", "endpoint HTTP para leer logs en caliente")
+	endpoint := flag.String("endpoint", "https://localhost:8081/logs", "endpoint HTTPS para leer logs en caliente")
+	caFile := flag.String("ca", "data/certs/ca-cert.pem", "ruta del certificado CA para validar TLS")
 	limit := flag.Int("limit", 50, "numero maximo de logs a mostrar (0 = todos)")
 	asJSON := flag.Bool("json", false, "imprime cada log como JSON crudo")
 	flag.Parse()
 
 	resolvedPath, err := resolveDBPath(*dbPath)
 	if err != nil {
-		entries, fetchErr := readLogsHTTP(*endpoint, *limit)
+		entries, fetchErr := readLogsHTTP(*endpoint, *caFile, *limit)
 		if fetchErr != nil {
 			log.Fatalf("%v. %v", err, fetchErr)
 		}
@@ -48,7 +52,7 @@ func main() {
 		Timeout:  1 * time.Second,
 	})
 	if err != nil {
-		entries, fetchErr := readLogsHTTP(*endpoint, *limit)
+		entries, fetchErr := readLogsHTTP(*endpoint, *caFile, *limit)
 		if fetchErr != nil {
 			log.Fatalf("no se pudo abrir la base de logs: %v. y tampoco se pudieron obtener por HTTP: %v", err, fetchErr)
 		}
@@ -123,8 +127,12 @@ func printEntries(entries map[string][]byte, limit int, asJSON bool) {
 	}
 }
 
-func readLogsHTTP(endpoint string, limit int) (map[string][]byte, error) {
-	client := &http.Client{Timeout: 3 * time.Second}
+func readLogsHTTP(endpoint, caFile string, limit int) (map[string][]byte, error) {
+	client, err := newLogsHTTPClient(endpoint, caFile)
+	if err != nil {
+		return nil, err
+	}
+
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -174,6 +182,31 @@ func resolveDBPath(path string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no se encontro la base remota en %v", candidates)
+}
+
+func newLogsHTTPClient(endpoint, caFile string) (*http.Client, error) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+		return &http.Client{Timeout: 3 * time.Second}, nil
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer la CA en %q: %w", caFile, err)
+	}
+
+	rootCAs := x509.NewCertPool()
+	if ok := rootCAs.AppendCertsFromPEM(caPEM); !ok {
+		return nil, fmt.Errorf("el fichero %q no contiene certificados PEM validos", caFile)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    rootCAs,
+		},
+	}
+
+	return &http.Client{Timeout: 3 * time.Second, Transport: transport}, nil
 }
 
 func emptyDash(s string) string {

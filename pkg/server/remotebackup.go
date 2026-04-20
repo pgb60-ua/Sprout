@@ -37,13 +37,22 @@ type remoteBackupSender struct {
 	filesRoot  string
 }
 
-func newRemoteBackupSenderFromEnv(endpoint, dbPath, filesRoot string, local *log.Logger) *remoteBackupSender {
+func newRemoteBackupSenderFromEnv(endpoint, caFile, dbPath, filesRoot string, local *log.Logger) *remoteBackupSender {
 	if endpoint == "" {
 		return nil
 	}
+
+	client, err := newRemoteHTTPClient(endpoint, caFile, 10*time.Second)
+	if err != nil {
+		if local != nil {
+			local.Printf("no se pudo inicializar cliente TLS remoto para backups: %v", err)
+		}
+		return nil
+	}
+
 	r := &remoteBackupSender{
 		endpoint:  endpoint,
-		client:    &http.Client{Timeout: 10 * time.Second},
+		client:    client,
 		interval:  defaultRemoteBackupInterval,
 		local:     local,
 		closed:    make(chan struct{}),

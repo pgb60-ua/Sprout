@@ -2,10 +2,14 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 	"context"
@@ -33,17 +37,25 @@ type remoteLogger struct {
 	local    *log.Logger
 }
 
-func newRemoteLoggerFromEnv(endpoint string, local *log.Logger) *remoteLogger {
+func newRemoteLoggerFromEnv(endpoint, caFile string, local *log.Logger) *remoteLogger {
 	if endpoint == "" {
 		return nil
 	}
-	return newRemoteLogger(endpoint, local)
+	return newRemoteLogger(endpoint, caFile, local)
 }
 
-func newRemoteLogger(endpoint string, local *log.Logger) *remoteLogger {
+func newRemoteLogger(endpoint, caFile string, local *log.Logger) *remoteLogger {
+	client, err := newRemoteHTTPClient(endpoint, caFile, 3*time.Second)
+	if err != nil {
+		if local != nil {
+			local.Printf("no se pudo inicializar cliente TLS remoto: %v", err)
+		}
+		return nil
+	}
+
 	rl := &remoteLogger{
 		endpoint: endpoint,
-		client:   &http.Client{Timeout: 3 * time.Second},
+		client:   client,
 		events:   make(chan remoteLogEvent, 100),
 		closed:   make(chan struct{}),
 		local:    local,
@@ -138,4 +150,29 @@ func (r *remoteLogger) send(event remoteLogEvent) error {
 		return fmt.Errorf("endpoint remoto devolvió status %s", resp.Status)
 	}
 	return nil
+}
+
+func newRemoteHTTPClient(endpoint, caFile string, timeout time.Duration) (*http.Client, error) {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(endpoint)), "https://") {
+		return &http.Client{Timeout: timeout}, nil
+	}
+
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer la CA en %q: %w", caFile, err)
+	}
+
+	rootCAs := x509.NewCertPool()
+	if ok := rootCAs.AppendCertsFromPEM(caPEM); !ok {
+		return nil, fmt.Errorf("el fichero %q no contiene certificados PEM validos", caFile)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    rootCAs,
+		},
+	}
+
+	return &http.Client{Timeout: timeout, Transport: transport}, nil
 }

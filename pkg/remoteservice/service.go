@@ -1,6 +1,7 @@
 package remoteservice
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"sprout/pkg/netcfg"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -55,6 +57,8 @@ type service struct {
 }
 
 func Run() error {
+	cfg := netcfg.Load()
+
 	addr := os.Getenv(defaultAddrEnv)
 	if addr == "" {
 		addr = defaultListenAddress
@@ -89,10 +93,20 @@ func Run() error {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		TLSConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+
+	if _, err := os.Stat(cfg.TLSCertFile); err != nil {
+		return fmt.Errorf("certificado TLS remoto no disponible en %q: %w", cfg.TLSCertFile, err)
+	}
+	if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
+		return fmt.Errorf("clave TLS remota no disponible en %q: %w", cfg.TLSKeyFile, err)
 	}
 
 	s.log.Printf("servicio remoto escuchando en %s", addr)
-	return httpSrv.ListenAndServe()
+	return httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 }
 
 func (s *service) isAuthorized(r *http.Request) bool {

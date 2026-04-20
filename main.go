@@ -80,10 +80,10 @@ func normalizeLocalURL(addr string) string {
 		return strings.TrimRight(addr, "/")
 	}
 	if strings.HasPrefix(addr, ":") {
-		return "http://localhost" + addr
+		return "https://localhost" + addr
 	}
 	if strings.Contains(addr, ":") {
-		return "http://" + addr
+		return "https://" + addr
 	}
-	return "http://localhost:" + addr
+	return "https://localhost:" + addr
 }
