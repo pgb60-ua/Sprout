@@ -4,6 +4,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,7 +15,10 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/netcfg"
 	"sprout/pkg/ui"
+
+	"github.com/skip2/go-qrcode"
 )
 
 // client estructura interna no exportada que controla
@@ -22,19 +27,28 @@ type client struct {
 	log         *log.Logger
 	currentUser string
 	authToken   string
+	totpEnabled bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
 	httpClient  *http.Client
+	apiEndpoint string
 }
 
 // Run es la única función exportada de este paquete.
-// Crea un client interno y ejecuta el bucle principal.
+// Crea un cliente interno y ejecuta el bucle principal.
 func Run() {
+	cfg := netcfg.Load()
+
+	httpClient, err := newSecureHTTPClient(cfg.TLSCAFile)
+	if err != nil {
+		log.New(os.Stdout, "[cli] ", log.LstdFlags).Printf("No se pudo inicializar cliente HTTPS: %v\n", err)
+		return
+	}
+
 	// Creamos un logger con prefijo 'cli' para identificar
 	// los mensajes en la consola.
 	c := &client{
-		log: log.New(os.Stdout, "[cli] ", log.LstdFlags),
-		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
-		},
+		log:         log.New(os.Stdout, "[cli] ", log.LstdFlags),
+		httpClient:  httpClient,
+		apiEndpoint: cfg.APIEndpoint,
 	}
 	c.runLoop()
 }
@@ -63,10 +77,17 @@ func (c *client) runLoop() {
 				"Salir",
 			}
 		} else {
+			totpOption := "Activar TOTP"
+			if c.totpEnabled {
+				totpOption = "Gestionar TOTP"
+			}
+
 			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
+				totpOption,
+				"Gestión de ficheros",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -96,8 +117,12 @@ func (c *client) runLoop() {
 			case 2:
 				c.updateData()
 			case 3:
-				c.logoutUser()
+				c.manageTOTP()
 			case 4:
+				c.fileManagerMenu()
+			case 5:
+				c.logoutUser()
+			case 6:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -175,12 +200,33 @@ func (c *client) loginUser() {
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
 
-	// Si login fue exitoso, guardamos currentUser y el token.
-	if res.Success {
-		c.currentUser = username
-		c.authToken = res.Token
-		fmt.Println("Sesión iniciada con éxito. Token guardado.")
+	if !res.Success {
+		return
 	}
+
+	// Segundo factor TOTP
+	if res.RequiresTOTP {
+		code := ui.ReadInput("Introduce el codigo TOTP")
+		totopRes := c.sendRequest(api.Request{
+			Action:    api.ActionLoginTOTP,
+			TempToken: res.TempToken,
+			TOTPCode:  code,
+		})
+		fmt.Println("Éxito:", totopRes.Success)
+		fmt.Println("Mensaje:", totopRes.Message)
+		if totopRes.Success {
+			c.currentUser = username
+			c.authToken = totopRes.Token
+			c.totpEnabled = true
+		}
+		return
+	}
+
+	// Sin TOTP
+	c.currentUser = username
+	c.authToken = res.Token
+	c.totpEnabled = res.TOTPEnabled
+	fmt.Println("Sesión iniciada con éxito. Token guardado.")
 }
 
 // fetchData pide datos privados al servidor.
@@ -209,6 +255,13 @@ func (c *client) fetchData() {
 	if res.Success {
 		fmt.Println("Tus datos:", res.Data)
 	}
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+	}
 }
 
 // updateData pide nuevo texto y lo envía al servidor con ActionUpdateData.
@@ -234,6 +287,13 @@ func (c *client) updateData() {
 
 	fmt.Println("Éxito:", res.Success)
 	fmt.Println("Mensaje:", res.Message)
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+	}
 }
 
 // logoutUser llama a la acción logout en el servidor, y si es exitosa,
@@ -261,6 +321,14 @@ func (c *client) logoutUser() {
 	if res.Success {
 		c.currentUser = ""
 		c.authToken = ""
+		c.totpEnabled = false
+	}
+
+	if !res.Success && res.SessionExpired {
+		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
 	}
 }
 
@@ -273,7 +341,7 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error interno del cliente"}
 	}
 
-	httpReq, err := http.NewRequest(http.MethodPost, "http://localhost:8080/api", bytes.NewBuffer(jsonData))
+	httpReq, err := http.NewRequest(http.MethodPost, c.apiEndpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		c.log.Println("No se ha podido construir la petición HTTP:", err)
 		return api.Response{Success: false, Message: "Error interno del cliente"}
@@ -301,4 +369,252 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+func newSecureHTTPClient(caFile string) (*http.Client, error) {
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo leer la CA en %q: %w", caFile, err)
+	}
+
+	rootCAs := x509.NewCertPool()
+	if ok := rootCAs.AppendCertsFromPEM(caPEM); !ok {
+		return nil, fmt.Errorf("el fichero %q no contiene certificados PEM validos", caFile)
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    rootCAs,
+		},
+	}
+
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+	}, nil
+}
+
+// fileManagerMenu permite al usuario gestionar archivos y carpetas.
+func (c *client) fileManagerMenu() {
+	for {
+		ui.ClearScreen()
+		title := "Gestión de ficheros y carpetas"
+		options := []string{
+			"Listar directorio",
+			"Crear fichero",
+			"Borrar fichero",
+			"Modificar fichero",
+			"Visualizar fichero",
+			"Crear carpeta",
+			"Borrar carpeta",
+			"Volver al menú principal",
+		}
+
+		choice := ui.PrintMenu(title, options)
+		switch choice {
+		case 1: // Listar directorio
+			path := ui.ReadInput("Introduce el directorio a listar (deja vací­o para la raí­z)")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionListFiles,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && len(res.Files) > 0 {
+				fmt.Println("Contenido:")
+				for _, f := range res.Files {
+					fmt.Println("-", f)
+				}
+			}
+		case 2: // Crear fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del nuevo fichero")
+			data := ui.ReadInput("Introduce el contenido del fichero")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionCreateFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     data,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 3: // Borrar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a borrar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionDeleteFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 4: // Modificar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a modificar")
+			data := ui.ReadMultiline("Introduce el nuevo contenido del fichero, el contenido actual se sobrescribirá.")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionModifyFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     data,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 5: // Visualizar fichero
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero a visualizar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionReadFile,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("--- Contenido ---")
+				fmt.Println(res.Data)
+				fmt.Println("-----------------")
+			}
+		case 6: // Crear carpeta
+			path := ui.ReadInput("Introduce la ruta/nombre de la nueva carpeta")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionCreateDir,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 7: // Borrar carpeta
+			path := ui.ReadInput("Introduce la ruta/nombre de la carpeta a borrar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionDeleteDir,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 8: // Volver al menú principal
+			return
+		}
+		ui.Pause("Pulsa [Enter] para continuar...")
+	}
+}
+
+func (c *client) manageTOTP() {
+	ui.ClearScreen()
+
+	// Si no tiene el totp activo
+	if !c.totpEnabled {
+		c.setupTOTP()
+		return
+	}
+
+	// Si tiene totp
+	choice := ui.PrintMenu("Gestión TOTP", []string{
+		"Reactivar TOTP",
+		"Desactivar TOTP",
+	})
+
+	switch choice {
+	case 1:
+		c.setupTOTP()
+	case 2:
+		c.disableTOTP()
+	}
+}
+
+func (c *client) setupTOTP() {
+	ui.ClearScreen()
+	fmt.Println("** Activar TOTP **")
+
+	// Si ya tiene TOTP activo, pregunta qué hacer
+	if c.totpEnabled {
+		choice := ui.PrintMenu("Ya tienes TOTP activo", []string{
+			"Usar secreto actual (reescanear)",
+			"Generar nuevo secreto",
+		})
+
+		if choice == 1 {
+			// Solo muestra el QR del secreto actual, sin confirmación
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionTOTPSetup,
+				Username: c.currentUser,
+				Token:    c.authToken,
+			})
+			if !res.Success {
+				fmt.Println("Error:", res.Message)
+				return
+			}
+			qr, err := qrcode.New(res.OTPAuthURI, qrcode.Medium)
+			if err != nil {
+				fmt.Println("URI TOTP:", res.OTPAuthURI)
+			} else {
+				fmt.Println(qr.ToSmallString(false))
+			}
+			return
+		}
+	}
+
+	// Pido el secreto al servidor
+	res := c.sendRequest(api.Request{
+		Action:         api.ActionTOTPSetup,
+		Username:       c.currentUser,
+		Token:          c.authToken,
+		ForceNewSecret: c.totpEnabled,
+	})
+	if !res.Success {
+		fmt.Println("Error:", res.Message)
+		return
+	}
+	qr, err := qrcode.New(res.OTPAuthURI, qrcode.Medium)
+	fmt.Println("URI TOTP:", res.OTPAuthURI)
+	if err != nil {
+		fmt.Println("URI TOTP:", res.OTPAuthURI)
+	} else {
+		fmt.Println(qr.ToSmallString(false))
+	}
+
+	for {
+		code := ui.ReadInput("Introduce el codigo de tu app (o 'cancelar')")
+		if code == "cancelar" {
+			return
+		}
+		confirmRes := c.sendRequest(api.Request{
+			Action:   api.ActionTOTPConfirm,
+			Username: c.currentUser,
+			Token:    c.authToken,
+			TOTPCode: code,
+		})
+
+		fmt.Println("Mensaje:", confirmRes.Message)
+		if confirmRes.Success {
+			c.totpEnabled = true
+			fmt.Println("TOTP activado correctamente")
+			return
+		}
+	}
+}
+
+func (c *client) disableTOTP() {
+	ui.ClearScreen()
+	fmt.Println("** Desactivar TOTP **")
+
+	code := ui.ReadInput("Introduce tu código TOTP actual para confirmar")
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionTOTPDisable,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		TOTPCode: code,
+	})
+
+	fmt.Println("Mensaje:", res.Message)
+	if res.Success {
+		c.totpEnabled = false
+		fmt.Println("TOTP desactivado correctamente")
+	}
 }
