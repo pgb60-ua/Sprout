@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"sprout/pkg/api"
@@ -82,12 +83,13 @@ func (c *client) runLoop() {
 				totpOption = "Gestionar TOTP"
 			}
 
-			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
+			// Usuario activo: Ver datos, Actualizar datos, TOTP, ficheros, panel admin, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
 				totpOption,
 				"Gestión de ficheros",
+				"Panel de Administrador",
 				"Cerrar sesión",
 				"Salir",
 			}
@@ -121,8 +123,13 @@ func (c *client) runLoop() {
 			case 4:
 				c.fileManagerMenu()
 			case 5:
-				c.logoutUser()
+				if c.adminPanelMenu() {
+					return
+				}
+				continue
 			case 6:
+				c.logoutUser()
+			case 7:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -131,6 +138,32 @@ func (c *client) runLoop() {
 
 		// Pausa para que el usuario vea resultados.
 		ui.Pause("Pulsa [Enter] para continuar...")
+	}
+}
+
+func (c *client) adminPanelMenu() bool {
+	for {
+		ui.ClearScreen()
+		title := "Panel de Administrador"
+		options := []string{
+			"Acceder a logs",
+			"Acceder a backups",
+			"Volver al menú principal",
+		}
+
+		choice := ui.PrintMenu(title, options)
+		switch choice {
+		case 1:
+			c.accessRemoteLogs()
+			ui.Pause("Pulsa [Enter] para continuar...")
+		case 2:
+			if c.accessRemoteBackups() {
+				return true
+			}
+			ui.Pause("Pulsa [Enter] para continuar...")
+		case 3:
+			return false
+		}
 	}
 }
 
@@ -393,6 +426,44 @@ func newSecureHTTPClient(caFile string) (*http.Client, error) {
 		Timeout:   5 * time.Second,
 		Transport: transport,
 	}, nil
+}
+
+func (c *client) accessRemoteLogs() {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a logs remotos **")
+
+	if err := c.runExternalCommand("go", "run", "./logs"); err != nil {
+		fmt.Println("No se pudieron abrir los logs remotos:", err)
+		return
+	}
+
+	fmt.Println("Visor de logs finalizado.")
+}
+
+func (c *client) accessRemoteBackups() bool {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a backups **")
+	fmt.Println("Se cerrará el programa principal para restaurar el backup.")
+
+	if !ui.Confirm("¿Quieres continuar") {
+		return false
+	}
+
+	if err := c.runExternalCommand("go", "run", "./backups"); err != nil {
+		fmt.Println("No se pudo iniciar la restauración de backups:", err)
+		return false
+	}
+
+	fmt.Println("Restaurador de backups iniciado. Cerrando el programa principal...")
+	return true
+}
+
+func (c *client) runExternalCommand(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
 }
 
 // fileManagerMenu permite al usuario gestionar archivos y carpetas.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"sprout/pkg/client"
+	"sprout/pkg/remoteservice"
 	"sprout/pkg/server"
 	"sprout/pkg/ui"
 )
@@ -25,6 +26,13 @@ func main() {
 	// Creamos un logger con prefijo 'main' para identificar
 	// los mensajes en la consola.
 	log := log.New(os.Stdout, "[main] ", log.LstdFlags)
+
+	log.Println("Iniciando servicio remoto de logs/backups...")
+	go func() {
+		if err := remoteservice.Run(); err != nil {
+			log.Fatalf("Error del servicio remoto: %v\n", err)
+		}
+	}()
 
 	// Inicia servidor en goroutine.
 	log.Println("Iniciando servidor...")
