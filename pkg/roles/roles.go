@@ -65,7 +65,6 @@ func (rs *RoleStore) Close() error {
 func NewRoleStore(path string, readOnly bool) (*RoleStore, error) {
 	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: readOnly})
 	if err != nil {
-		db.Close()
 		return nil, fmt.Errorf("error abriendo %q: %w", path, err)
 	}
 
@@ -73,6 +72,7 @@ func NewRoleStore(path string, readOnly bool) (*RoleStore, error) {
 
 	if !readOnly {
 		if err := rs.init(); err != nil {
+			db.Close()
 			return nil, err
 		}
 	}
