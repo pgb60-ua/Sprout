@@ -7,12 +7,23 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"golang.org/x/crypto/argon2"
 )
+
+const keyFileVersion = 1
+
+type keyFile struct {
+	Version   int    `json:"version"`
+	KDF       string `json:"kdf"`
+	Cipher    string `json:"cipher"`
+	Salt      []byte `json:"salt"`
+	Encrypted []byte `json:"encrypted"`
+}
 
 func keyPath(username string) string {
 	hash := sha256.Sum256([]byte(username))
@@ -35,7 +46,7 @@ func EncryptPrivateKey(sk ed25519.PrivateKey, password, username string) error {
 		return fmt.Errorf("error generando salt: %w", err)
 	}
 
-	// Derivo clave AES de 32 bytes a partir de la cotraseña
+	// Derivo clave AES de 32 bytes a partir de la contraseña
 	key := argon2.IDKey([]byte(password), salt, 1, 64*1024, 4, 32)
 
 	// Creo el cifrador AES-GCM
@@ -58,13 +69,28 @@ func EncryptPrivateKey(sk ed25519.PrivateKey, password, username string) error {
 	// Cifro la clave privada
 	encrypted := gcm.Seal(nonce, nonce, sk, nil)
 
-	// Guardo salt + datos cifrados en disco
-	fileData := append(salt, encrypted...)
+	// Guardo archivo en el disco
+	kf := keyFile{
+		Version:   keyFileVersion,
+		KDF:       "argon2id",
+		Cipher:    "aes-256-gcm",
+		Salt:      salt,
+		Encrypted: encrypted,
+	}
+
+	fileData, err := json.Marshal(kf)
+	if err != nil {
+		return fmt.Errorf("error serializando archivo de clave: %w", err)
+	}
 	path := keyPath(username)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("error creando directorio: %w", err)
 	}
-	return os.WriteFile(path, fileData, 0600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, fileData, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func DecryptPrivateKey(password, username string) (ed25519.PrivateKey, error) {
@@ -75,12 +101,18 @@ func DecryptPrivateKey(password, username string) (ed25519.PrivateKey, error) {
 		return nil, fmt.Errorf("error leyendo clave privada: %w", err)
 	}
 
-	// Separo salt
-	if len(fileData) < 16 {
-		return nil, fmt.Errorf("archivo de clave corrupto")
+	var kf keyFile
+	if err := json.Unmarshal(fileData, &kf); err != nil {
+		return nil, fmt.Errorf("archivo de clave corrupto: %w", err)
 	}
-	salt := fileData[:16]
-	encrypted := fileData[16:]
+	if kf.Version != keyFileVersion {
+		return nil, fmt.Errorf("versión de archivo de clave no soportada: %d", kf.Version)
+	}
+	if kf.KDF != "argon2id" || kf.Cipher != "aes-256-gcm" {
+		return nil, fmt.Errorf("algoritmo no soportado: %s/%s", kf.KDF, kf.Cipher)
+	}
+	salt := kf.Salt
+	encrypted := kf.Encrypted
 
 	// Derivo la misma clave AES con la contraseña y el salt
 	key := argon2.IDKey([]byte(password), salt, 1, 64*1024, 4, 32)
@@ -105,7 +137,10 @@ func DecryptPrivateKey(password, username string) (ed25519.PrivateKey, error) {
 	// Descifro
 	sk, err := gcm.Open(nil, nonce, cipherText, nil)
 	if err != nil {
-		return nil, fmt.Errorf("error descifrando clave privada, contraseña incorrecta")
+		return nil, fmt.Errorf("error descifrando clave privada, contraseña incorrecta o achivo de clave corrupto/manipulado")
+	}
+	if len(sk) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("clave privada corrupta o inválida")
 	}
 
 	return ed25519.PrivateKey(sk), nil

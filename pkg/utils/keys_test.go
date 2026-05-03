@@ -7,7 +7,19 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	os.RemoveAll(filepath.Join("data", "keys"))
+	os.RemoveAll("data")
+	os.Exit(code)
+}
+
 func TestKeyRoundTrip(t *testing.T) {
+	username := "testuser"
+	t.Cleanup(func() {
+		os.Remove(keyPath(username))
+	})
+
 	pk, sk, err := GenerateKeyPair()
 	if err != nil {
 		t.Fatalf("error generando par de claves: %v", err)
@@ -19,7 +31,6 @@ func TestKeyRoundTrip(t *testing.T) {
 		t.Fatalf("sk tiene longitud incorrecta: %d", len(sk))
 	}
 
-	username := "testuser"
 	password := "contraseña-segura"
 
 	if err := EncryptPrivateKey(sk, password, username); err != nil {
@@ -37,12 +48,16 @@ func TestKeyRoundTrip(t *testing.T) {
 }
 
 func TestDecryptWrongPassword(t *testing.T) {
+	username := "testuser2"
+	t.Cleanup(func() {
+		os.Remove(keyPath(username))
+	})
+
 	_, sk, err := GenerateKeyPair()
 	if err != nil {
 		t.Fatalf("error generando par de claves: %v", err)
 	}
 
-	username := "testuser2"
 	if err := EncryptPrivateKey(sk, "contraseña-correcta", username); err != nil {
 		t.Fatalf("error cifrando clave privada: %v", err)
 	}
@@ -56,12 +71,14 @@ func TestDecryptWrongPassword(t *testing.T) {
 func TestDecryptCorruptFile(t *testing.T) {
 	username := "testuser3"
 	path := keyPath(username)
+	t.Cleanup(func() {
+		os.Remove(path)
+	})
 
-	// Escribe datos corruptos
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("error creando directorio: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("datos corruptos"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("{json corrupto}"), 0600); err != nil {
 		t.Fatalf("error escribiendo archivo corrupto: %v", err)
 	}
 
