@@ -43,8 +43,14 @@ func (rs *RoleStore) init() error {
 		for _, name := range []string{AdminRole, DefaultRole} {
 			if b.Get([]byte(name)) == nil {
 				role := Role{Name: name, CreatedAt: time.Now()}
-				data, _ := json.Marshal(role)
-				b.Put([]byte(name), data)
+				data, err := json.Marshal(role)
+				if err != nil {
+					return err
+				}
+				if err := b.Put([]byte(name), data); err != nil {
+					return err
+				}
+
 			}
 		}
 
@@ -57,9 +63,10 @@ func (rs *RoleStore) Close() error {
 }
 
 func NewRoleStore(path string, readOnly bool) (*RoleStore, error) {
-	db, err := bolt.Open(path, 0666, &bolt.Options{ReadOnly: readOnly})
+	db, err := bolt.Open(path, 0600, &bolt.Options{ReadOnly: readOnly})
 	if err != nil {
-		return nil, fmt.Errorf("error abriendo roles.db: %w", err)
+		db.Close()
+		return nil, fmt.Errorf("error abriendo %q: %w", path, err)
 	}
 
 	rs := &RoleStore{db: db}
@@ -78,6 +85,10 @@ func NewRoleStore(path string, readOnly bool) (*RoleStore, error) {
 func (rs *RoleStore) CreateRole(name string) error {
 	return rs.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketRoles))
+		if b == nil {
+			return fmt.Errorf("bucket de roles no encontrado")
+		}
+
 		if b.Get([]byte(name)) != nil {
 			return fmt.Errorf("el rol '%s' ya existe", name)
 		}
@@ -93,6 +104,10 @@ func (rs *RoleStore) CreateRole(name string) error {
 func (rs *RoleStore) DeleteRole(name string) error {
 	return rs.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketRoles))
+		if b == nil {
+			return fmt.Errorf("bucket de roles no encontrado")
+		}
+
 		if b.Get([]byte(name)) == nil {
 			return fmt.Errorf("el rol '%s' no existe", name)
 		}
@@ -104,6 +119,10 @@ func (rs *RoleStore) ListRoles() ([]Role, error) {
 	var roles []Role
 	err := rs.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketRoles))
+		if b == nil {
+			return fmt.Errorf("bucket de roles no encontrado")
+		}
+
 		return b.ForEach(func(k, v []byte) error {
 			var role Role
 			if err := json.Unmarshal(v, &role); err != nil {
@@ -120,6 +139,10 @@ func (rs *RoleStore) RoleExists(name string) (bool, error) {
 	var exists bool
 	err := rs.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(bucketRoles))
+		if b == nil {
+			return fmt.Errorf("bucket de roles no encontrado")
+		}
+
 		exists = b.Get([]byte(name)) != nil
 		return nil
 	})
