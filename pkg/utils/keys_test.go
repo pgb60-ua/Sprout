@@ -1,0 +1,72 @@
+package utils
+
+import (
+	"crypto/ed25519"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestKeyRoundTrip(t *testing.T) {
+	pk, sk, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("error generando par de claves: %v", err)
+	}
+	if len(pk) != ed25519.PublicKeySize {
+		t.Fatalf("pk tiene longitud incorrecta: %d", len(pk))
+	}
+	if len(sk) != ed25519.PrivateKeySize {
+		t.Fatalf("sk tiene longitud incorrecta: %d", len(sk))
+	}
+
+	username := "testuser"
+	password := "contraseña-segura"
+
+	if err := EncryptPrivateKey(sk, password, username); err != nil {
+		t.Fatalf("error cifrando clave privada: %v", err)
+	}
+
+	recovered, err := DecryptPrivateKey(password, username)
+	if err != nil {
+		t.Fatalf("error descifrando clave privada: %v", err)
+	}
+
+	if !recovered.Equal(sk) {
+		t.Fatal("la clave recuperada no coincide con la original")
+	}
+}
+
+func TestDecryptWrongPassword(t *testing.T) {
+	_, sk, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("error generando par de claves: %v", err)
+	}
+
+	username := "testuser2"
+	if err := EncryptPrivateKey(sk, "contraseña-correcta", username); err != nil {
+		t.Fatalf("error cifrando clave privada: %v", err)
+	}
+
+	_, err = DecryptPrivateKey("contraseña-incorrecta", username)
+	if err == nil {
+		t.Fatal("debería haber fallado con contraseña incorrecta")
+	}
+}
+
+func TestDecryptCorruptFile(t *testing.T) {
+	username := "testuser3"
+	path := keyPath(username)
+
+	// Escribe datos corruptos
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("error creando directorio: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("datos corruptos"), 0600); err != nil {
+		t.Fatalf("error escribiendo archivo corrupto: %v", err)
+	}
+
+	_, err := DecryptPrivateKey("cualquier-password", username)
+	if err == nil {
+		t.Fatal("debería haber fallado con archivo corrupto")
+	}
+}
