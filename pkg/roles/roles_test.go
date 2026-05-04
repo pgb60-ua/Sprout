@@ -2,6 +2,7 @@ package roles
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -158,5 +159,79 @@ func TestRoleStore_PersistsOnDisk(t *testing.T) {
 		if !exists {
 			t.Fatal("el rol 'moderator' debería persistir tras cerrar y reabrir la store")
 		}
+	}
+}
+
+func TestRoleStore_AssignRole(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
+		t.Fatalf("AssignRole falló: %v", err)
+	}
+
+	roles, err := rs.GetUserRoles("carlos")
+	if err != nil {
+		t.Fatalf("GetUserRoles falló: %v", err)
+	}
+	if !slices.Contains(roles, DefaultRole) {
+		t.Fatalf("se esperaba el rol %q asignado", DefaultRole)
+	}
+}
+
+func TestRoleStore_AssignRoleNotFound(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.AssignRole("carlos", "noexiste"); err == nil {
+		t.Fatal("se esperaba error al asignar un rol inexistente")
+	}
+}
+
+func TestRoleStore_AssignRoleDuplicate(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
+		t.Fatalf("primera AssignRole falló: %v", err)
+	}
+	if err := rs.AssignRole("carlos", DefaultRole); err == nil {
+		t.Fatal("se esperaba error al asignar un rol duplicado")
+	}
+}
+
+func TestRoleStore_RemoveRole(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
+		t.Fatalf("AssignRole falló: %v", err)
+	}
+	if err := rs.RemoveRole("carlos", DefaultRole); err != nil {
+		t.Fatalf("RemoveRole falló: %v", err)
+	}
+
+	roles, err := rs.GetUserRoles("carlos")
+	if err != nil {
+		t.Fatalf("GetUserRoles falló: %v", err)
+	}
+	if slices.Contains(roles, DefaultRole) {
+		t.Fatalf("el rol %q no debería estar tras eliminarlo", DefaultRole)
+	}
+}
+
+func TestRoleStore_RemoveRoleNotAssigned(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.RemoveRole("carlos", DefaultRole); err == nil {
+		t.Fatal("se esperaba error al quitar un rol no asignado")
+	}
+}
+
+func TestRoleStore_GetUserRolesEmpty(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	roles, err := rs.GetUserRoles("carlos")
+	if err != nil {
+		t.Fatalf("GetUserRoles falló: %v", err)
+	}
+	if len(roles) != 0 {
+		t.Fatalf("se esperaba slice vacío para usuario sin roles, obtenido: %v", roles)
 	}
 }
