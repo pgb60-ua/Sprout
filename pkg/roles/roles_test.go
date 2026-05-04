@@ -235,3 +235,58 @@ func TestRoleStore_GetUserRolesEmpty(t *testing.T) {
 		t.Fatalf("se esperaba slice vacío para usuario sin roles, obtenido: %v", roles)
 	}
 }
+
+func TestRoleStore_UserRolesPersistsOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "roles.db")
+
+	{
+		rs, err := NewRoleStore(path, false)
+		if err != nil {
+			t.Fatalf("open falló: %v", err)
+		}
+		if err := rs.AssignRole("carlos", DefaultRole); err != nil {
+			_ = rs.Close()
+			t.Fatalf("AssignRole falló: %v", err)
+		}
+		_ = rs.Close()
+	}
+
+	{
+		rs, err := NewRoleStore(path, false)
+		if err != nil {
+			t.Fatalf("re-open falló: %v", err)
+		}
+		defer rs.Close()
+
+		roles, err := rs.GetUserRoles("carlos")
+		if err != nil {
+			t.Fatalf("GetUserRoles tras re-open falló: %v", err)
+		}
+		if !slices.Contains(roles, DefaultRole) {
+			t.Fatalf("el rol %q debería persistir tras cerrar y reabrir la store", DefaultRole)
+		}
+	}
+}
+
+func TestRoleStore_DeleteRoleCleansUserRoles(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.CreateRole("moderator"); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
+	if err := rs.AssignRole("carlos", "moderator"); err != nil {
+		t.Fatalf("AssignRole falló: %v", err)
+	}
+	if err := rs.DeleteRole("moderator"); err != nil {
+		t.Fatalf("DeleteRole falló: %v", err)
+	}
+
+	roles, err := rs.GetUserRoles("carlos")
+	if err != nil {
+		t.Fatalf("GetUserRoles falló: %v", err)
+	}
+	if slices.Contains(roles, "moderator") {
+		t.Fatal("el rol 'moderator' no debería aparecer en user_roles tras ser eliminado")
+	}
+}

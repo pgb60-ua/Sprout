@@ -112,7 +112,30 @@ func (rs *RoleStore) DeleteRole(name string) error {
 		if b.Get([]byte(name)) == nil {
 			return fmt.Errorf("el rol '%s' no existe", name)
 		}
-		return b.Delete([]byte(name))
+		if err := b.Delete([]byte(name)); err != nil {
+			return err
+		}
+
+		bu := tx.Bucket([]byte(bucketUserRoles))
+		if bu != nil {
+			bu.ForEach(func(k, v []byte) error {
+				var ur UserRoles
+				if err := json.Unmarshal(v, &ur); err != nil {
+					return err
+				}
+				i := slices.Index(ur.Roles, name)
+				if i == -1 {
+					return nil
+				}
+				ur.Roles = slices.Delete(ur.Roles, i, i+1)
+				data, err := json.Marshal(ur)
+				if err != nil {
+					return err
+				}
+				return bu.Put(k, data)
+			})
+		}
+		return nil
 	})
 }
 
