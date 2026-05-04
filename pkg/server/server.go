@@ -31,6 +31,7 @@ type server struct {
 	loginAttempts map[string]*loginAttempt
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
 	sessionKeys   map[string][]byte
+	pendingKey    map[string]pendingKeyLogin
 }
 
 type session struct {
@@ -64,6 +65,7 @@ func Run() error {
 		loginAttempts: make(map[string]*loginAttempt),
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
 		sessionKeys:   make(map[string][]byte),
+		pendingKey:    make(map[string]pendingKeyLogin),
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -152,6 +154,13 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.tOTPConfirm(req)
 	case api.ActionTOTPDisable:
 		res = s.totpDisable(req)
+	// Public private key
+	case api.ActionKeySetup:
+		res = s.keySetup(req)
+	case api.ActionKeyDisable:
+		res = s.keyDisable(req)
+	case api.ActionLoginKey:
+		res = s.loginKey(req)
 	default:
 		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
@@ -276,6 +285,27 @@ func (s *server) loginUser(req api.Request) api.Response {
 			RequiresTOTP: true,
 			TempToken:    tempToken,
 		}
+	}
+
+	// Compruebo si tiene public private key
+	kd, err := s.getKeyAuthData(req.Username)
+	if err == nil && kd.Enabled {
+		challenge, err := utils.NewRandomToken(32)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar challenge"}
+		}
+		tempToken, err := utils.NewRandomToken(lengthToken)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar token temporal"}
+		}
+		s.mu.Lock()
+		s.pendingKey[tempToken] = pendingKeyLogin{
+			Username:  req.Username,
+			Challenge: []byte(challenge),
+			ExpiresAt: time.Now().Add(temporalTokenDuration),
+		}
+		s.mu.Unlock()
+		return api.Response{Success: false, RequiresKey: true, TempToken: tempToken, Challenge: []byte(challenge)}
 	}
 
 	//Sin TOTP - creo la sesion
