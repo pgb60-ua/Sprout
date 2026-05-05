@@ -4,6 +4,7 @@ package server
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +43,7 @@ type session struct {
 const sessionDuration = 24 * time.Hour
 const lengthToken = 16
 const temporalTokenDuration = 2 * time.Minute
+const fileTimestampNamespace = "file_timestamps"
 
 // Run inicia la base de datos y arranca el servidor HTTPS.
 func Run() error {
@@ -459,6 +462,10 @@ func (s *server) createFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al crear el fichero"}
 	}
 
+	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: "Fichero creado, pero no se pudo guardar su timestamp"}
+	}
+
 	return api.Response{Success: true, Message: "Fichero creado con exito"}
 }
 
@@ -482,6 +489,7 @@ func (s *server) deleteFile(req api.Request) api.Response {
 	if err := os.Remove(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar fichero"}
 	}
+	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(req.Username, req.Path))
 
 	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
@@ -508,6 +516,10 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
 	}
 
+	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
 	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
@@ -515,6 +527,10 @@ func (s *server) modifyFile(req api.Request) api.Response {
 
 	if err := os.WriteFile(path, encrypted, 0644); err != nil {
 		return api.Response{Success: false, Message: "Error al modificar el fichero"}
+	}
+
+	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudo actualizar su timestamp"}
 	}
 
 	return api.Response{Success: true, Message: "Fichero modificado con exito"}
@@ -540,6 +556,10 @@ func (s *server) readFile(req api.Request) api.Response {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al leer el fichero"}
+	}
+
+	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
 	}
 
 	plaintext, err := decryptFileData(dek, req.Path, data)
@@ -621,6 +641,89 @@ func (s *server) listFiles(req api.Request) api.Response {
 	}
 
 	return api.Response{Success: true, Message: "Listado correcto", Files: files}
+}
+
+func fileTimestampKey(username, reqPath string) []byte {
+	return []byte(username + "\x00" + reqPath)
+}
+
+func (s *server) storeFileTimestamp(username, reqPath, absPath string, baseDEK []byte) error {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("no se pudo leer el timestamp del fichero: %w", err)
+	}
+
+	timestampRaw := []byte(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+	timestampKey, err := deriveSubkey(baseDEK, "timestamp:"+reqPath, dekLen)
+	if err != nil {
+		return fmt.Errorf("no se pudo derivar clave para timestamp: %w", err)
+	}
+
+	ciphertext, nonce, err := encryptWithGCM(timestampKey, timestampRaw)
+	if err != nil {
+		return fmt.Errorf("no se pudo cifrar el timestamp del fichero: %w", err)
+	}
+
+	blobBytes, err := json.Marshal(gcmBlob{
+		Version:    cryptoVersion,
+		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
+		Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
+	})
+	if err != nil {
+		return fmt.Errorf("no se pudo serializar el timestamp cifrado: %w", err)
+	}
+
+	return s.db.Put(fileTimestampNamespace, fileTimestampKey(username, reqPath), blobBytes)
+}
+
+func (s *server) checkFileTimestamp(username, reqPath, absPath string, baseDEK []byte) error {
+	stored, err := s.db.Get(fileTimestampNamespace, fileTimestampKey(username, reqPath))
+	if err != nil {
+		return fmt.Errorf("el timestamp del fichero no coincide o no existe en la base de datos: %w", err)
+	}
+
+	timestampKey, err := deriveSubkey(baseDEK, "timestamp:"+reqPath, dekLen)
+	if err != nil {
+		return fmt.Errorf("no se pudo derivar clave para validar timestamp: %w", err)
+	}
+
+	var blob gcmBlob
+	if err := json.Unmarshal(stored, &blob); err != nil {
+		return fmt.Errorf("el timestamp almacenado del fichero no es valido: %w", err)
+	}
+	if blob.Version != cryptoVersion {
+		return fmt.Errorf("version de timestamp cifrado no soportada: %d", blob.Version)
+	}
+
+	nonce, err := base64.RawStdEncoding.DecodeString(blob.Nonce)
+	if err != nil {
+		return fmt.Errorf("nonce de timestamp invalido: %w", err)
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(blob.Ciphertext)
+	if err != nil {
+		return fmt.Errorf("ciphertext de timestamp invalido: %w", err)
+	}
+
+	timestampRaw, err := decryptWithGCM(timestampKey, nonce, ciphertext)
+	if err != nil {
+		return fmt.Errorf("no se pudo descifrar el timestamp almacenado del fichero: %w", err)
+	}
+
+	storedUnixNano, err := strconv.ParseInt(string(timestampRaw), 10, 64)
+	if err != nil {
+		return fmt.Errorf("el timestamp almacenado del fichero es invalido: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("no se pudo leer el timestamp actual del fichero: %w", err)
+	}
+
+	if info.ModTime().UnixNano() != storedUnixNano {
+		return fmt.Errorf("el fichero ha sido modificado fuera de Sprout")
+	}
+
+	return nil
 }
 
 func (s *server) storeSessionKey(username string, dek []byte) {
