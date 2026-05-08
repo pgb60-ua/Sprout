@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -63,7 +64,7 @@ func (r *remoteBackupSender) send(attempts int, delay time.Duration) {
 		dbRaw, errDB := os.ReadFile(r.dbPath)
 		var files []remotecommon.BackupFile
 		if errDB == nil {
-			filepath.WalkDir(r.filesRoot, func(path string, info os.DirEntry, err error) error {
+			filepath.WalkDir(r.filesRoot, func(path string, info fs.DirEntry, err error) error {
 				if err == nil && !info.IsDir() {
 					if relPath, errRel := filepath.Rel(r.filesRoot, path); errRel == nil {
 						if raw, errRead := os.ReadFile(path); errRead == nil { files = append(files, remotecommon.BackupFile{Path: relPath, Data: raw}) }

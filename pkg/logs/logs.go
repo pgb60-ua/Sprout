@@ -28,13 +28,15 @@ func Run() {
 		})
 	} else if cli, e := remotecommon.NewHTTPClient(endpoint, caFile, 3*time.Second); e == nil {
 		if req, _ := http.NewRequest("GET", endpoint+"?limit=50", nil); req != nil {
-			if resp, e2 := cli.Do(req); e2 == nil && resp.StatusCode < 400 {
+			if resp, e2 := cli.Do(req); e2 == nil {
 				defer resp.Body.Close()
-				var evs []remotecommon.LogEvent
-				if json.NewDecoder(resp.Body).Decode(&evs) == nil {
-					for i, ev := range evs {
-						if raw, e3 := json.Marshal(ev); e3 == nil {
-							entries[fmt.Sprintf("%03d-%s", i, ev.Timestamp.UTC().Format(time.RFC3339Nano))] = raw
+				if resp.StatusCode < 400 {
+					var evs []remotecommon.LogEvent
+					if json.NewDecoder(resp.Body).Decode(&evs) == nil {
+						for i, ev := range evs {
+							if raw, e3 := json.Marshal(ev); e3 == nil {
+								entries[fmt.Sprintf("%03d-%s", i, ev.Timestamp.UTC().Format(time.RFC3339Nano))] = raw
+							}
 						}
 					}
 				}

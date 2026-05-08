@@ -2,6 +2,7 @@ package backups
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,7 +31,7 @@ func Run() {
 		fullPath := filepath.Join(backupRoot, e.Name())
 		
 		var size int64
-		filepath.WalkDir(fullPath, func(_ string, d os.DirEntry, _ error) error {
+		filepath.WalkDir(fullPath, func(_ string, d fs.DirEntry, _ error) error {
 			if d != nil && !d.IsDir() { if info, err := d.Info(); err == nil { size += info.Size() } }
 			return nil
 		})
@@ -65,26 +66,68 @@ func Run() {
 	}
 
 	sel := backupsList[choice-1].Path
-	os.RemoveAll(filepath.Join(targetDir, "server.db"))
-	os.RemoveAll(filepath.Join(targetDir, "files"))
-	os.MkdirAll(filepath.Join(targetDir, "files"), 0755)
 	
-	if dbSrc, err := os.ReadFile(filepath.Join(sel, "server.db")); err != nil {
+	tmpDir, err := os.MkdirTemp(filepath.Dir(targetDir), "sprout-restore-*")
+	if err != nil {
+		fmt.Printf("Error creando directorio temporal: %v\n", err)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "files"), 0755); err != nil {
+		fmt.Printf("Error creando directorios temporales: %v\n", err)
+		return
+	}
+	
+	dbSrc, err := os.ReadFile(filepath.Join(sel, "server.db"))
+	if err != nil {
 		fmt.Printf("El backup no contiene server.db o no se pudo leer: %v\n", err)
 		return
-	} else {
-		os.WriteFile(filepath.Join(targetDir, "server.db"), dbSrc, 0600)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "server.db"), dbSrc, 0600); err != nil {
+		fmt.Printf("Error escribiendo server.db: %v\n", err)
+		return
 	}
 
-	filepath.WalkDir(filepath.Join(sel, "files"), func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
-			rel, _ := filepath.Rel(filepath.Join(sel, "files"), p)
-			dst := filepath.Join(targetDir, "files", rel)
-			os.MkdirAll(filepath.Dir(dst), 0755)
-			if b, err := os.ReadFile(p); err == nil { os.WriteFile(dst, b, 0600) }
+	err = filepath.WalkDir(filepath.Join(sel, "files"), func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) && p == filepath.Join(sel, "files") { return nil }
+			return err
+		}
+		if !d.IsDir() {
+			rel, err := filepath.Rel(filepath.Join(sel, "files"), p)
+			if err != nil { return err }
+			dst := filepath.Join(tmpDir, "files", rel)
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil { return err }
+			b, err := os.ReadFile(p)
+			if err != nil { return err }
+			if err := os.WriteFile(dst, b, 0600); err != nil { return err }
 		}
 		return nil
 	})
+	if err != nil {
+		fmt.Printf("Error copiando archivos: %v\n", err)
+		return
+	}
+
+	os.MkdirAll(targetDir, 0755)
+	if err := os.RemoveAll(filepath.Join(targetDir, "server.db")); err != nil {
+		fmt.Printf("Error borrando el viejo server.db: %v\n", err)
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(targetDir, "files")); err != nil {
+		fmt.Printf("Error borrando el antiguo directorio files: %v\n", err)
+		return
+	}
+
+	if err := os.Rename(filepath.Join(tmpDir, "server.db"), filepath.Join(targetDir, "server.db")); err != nil {
+		fmt.Printf("Error moviendo server.db: %v\n", err)
+		return
+	}
+	if err := os.Rename(filepath.Join(tmpDir, "files"), filepath.Join(targetDir, "files")); err != nil {
+		fmt.Printf("Error moviendo directorio files: %v\n", err)
+		return
+	}
 	
 	fmt.Println("Backup restaurado correctamente.")
 }
