@@ -448,8 +448,6 @@ func (c *client) accessRemoteBackups() bool {
 	}
 
 	backups.Run()
-
-	fmt.Println("Restaurador de backups iniciado. Cerrando el programa principal...")
 	return true
 }
 
