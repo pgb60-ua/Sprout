@@ -10,21 +10,11 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"sprout/pkg/remotecommon"
 )
 
 const defaultRemoteBackupInterval = 60 * time.Second
-
-type backupFile struct {
-	Path string `json:"path"`
-	Data []byte `json:"data"`
-}
-
-type backupPayload struct {
-	Timestamp time.Time    `json:"timestamp"`
-	Source    string       `json:"source"`
-	DBData    []byte       `json:"db_data"`
-	Files     []backupFile `json:"files"`
-}
 
 type remoteBackupSender struct {
 	endpoint   string
@@ -42,7 +32,7 @@ func newRemoteBackupSenderFromEnv(endpoint, caFile, dbPath, filesRoot string, lo
 		return nil
 	}
 
-	client, err := newRemoteHTTPClient(endpoint, caFile, 10*time.Second)
+	client, err := remotecommon.NewHTTPClient(endpoint, caFile, 10*time.Second)
 	if err != nil {
 		if local != nil {
 			local.Printf("no se pudo inicializar cliente TLS remoto para backups: %v", err)
@@ -64,12 +54,9 @@ func newRemoteBackupSenderFromEnv(endpoint, caFile, dbPath, filesRoot string, lo
 }
 
 func (r *remoteBackupSender) Close() {
-	if r == nil {
-		return
+	if r != nil {
+		r.closeOnce.Do(func() { close(r.closed) })
 	}
-	r.closeOnce.Do(func() {
-		close(r.closed)
-	})
 }
 
 func (r *remoteBackupSender) run() {
@@ -91,17 +78,12 @@ func (r *remoteBackupSender) sendSnapshotWithRetry(attempts int, delay time.Dura
 	if r == nil {
 		return
 	}
-	if attempts < 1 {
-		attempts = 1
-	}
-
-	for i := 1; i <= attempts; i++ {
+	for i := 1; i <= max(1, attempts); i++ {
 		if err := r.sendSnapshot(); err == nil {
 			return
 		} else if r.local != nil && i == attempts {
 			r.local.Printf("no se pudo enviar backup remoto tras %d intentos: %v", attempts, err)
 		}
-
 		select {
 		case <-r.closed:
 			return
@@ -116,9 +98,8 @@ func (r *remoteBackupSender) sendSnapshot() error {
 	}
 	payload, err := r.buildPayload()
 	if err != nil {
-		return fmt.Errorf("no se pudo construir backup remoto: %w", err)
+		return err
 	}
-
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("no se pudo serializar backup remoto: %w", err)
@@ -126,58 +107,44 @@ func (r *remoteBackupSender) sendSnapshot() error {
 
 	req, err := http.NewRequest(http.MethodPost, r.endpoint, bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("no se pudo crear request backup remoto: %w", err)
+		return fmt.Errorf("no se pudo crear petición HTTP: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("no se pudo enviar backup remoto: %w", err)
+		return fmt.Errorf("no se pudo hacer request POST al endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("endpoint de backup remoto devolvió status %s", resp.Status)
+		return fmt.Errorf("el servidor de logs devolvió codigo http erroneo (%s)", resp.Status)
 	}
-
 	return nil
 }
 
-func (r *remoteBackupSender) buildPayload() (backupPayload, error) {
+func (r *remoteBackupSender) buildPayload() (remotecommon.BackupPayload, error) {
 	dbRaw, err := os.ReadFile(r.dbPath)
 	if err != nil {
-		return backupPayload{}, fmt.Errorf("error leyendo DB principal: %w", err)
+		return remotecommon.BackupPayload{}, fmt.Errorf("error leyendo DB principal: %w", err)
 	}
 
-	files := make([]backupFile, 0)
+	var files []remotecommon.BackupFile
 	err = filepath.WalkDir(r.filesRoot, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
+		if walkErr != nil || d.IsDir() {
 			return walkErr
 		}
-		if d.IsDir() {
-			return nil
+		relPath, _ := filepath.Rel(r.filesRoot, path)
+		if raw, err := os.ReadFile(path); err == nil {
+			files = append(files, remotecommon.BackupFile{Path: relPath, Data: raw})
 		}
-
-		relPath, err := filepath.Rel(r.filesRoot, path)
-		if err != nil {
-			return err
-		}
-
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		files = append(files, backupFile{
-			Path: relPath,
-			Data: raw,
-		})
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		return backupPayload{}, fmt.Errorf("error leyendo ficheros de usuario: %w", err)
+		return remotecommon.BackupPayload{}, fmt.Errorf("error construyendo lista de ficheros para backup: %w", err)
 	}
 
-	return backupPayload{
+	return remotecommon.BackupPayload{
 		Timestamp: time.Now().UTC(),
 		Source:    "sprout",
 		DBData:    dbRaw,

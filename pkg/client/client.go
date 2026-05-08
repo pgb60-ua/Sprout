@@ -12,10 +12,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/backups"
+	"sprout/pkg/logs"
 	"sprout/pkg/netcfg"
 	"sprout/pkg/ui"
 
@@ -432,10 +433,7 @@ func (c *client) accessRemoteLogs() {
 	ui.ClearScreen()
 	fmt.Println("** Acceso a logs remotos **")
 
-	if err := c.runExternalCommand("go", "run", "./logs"); err != nil {
-		fmt.Println("No se pudieron abrir los logs remotos:", err)
-		return
-	}
+	logs.Run()
 
 	fmt.Println("Visor de logs finalizado.")
 }
@@ -449,21 +447,10 @@ func (c *client) accessRemoteBackups() bool {
 		return false
 	}
 
-	if err := c.runExternalCommand("go", "run", "./backups"); err != nil {
-		fmt.Println("No se pudo iniciar la restauración de backups:", err)
-		return false
-	}
+	backups.Run()
 
 	fmt.Println("Restaurador de backups iniciado. Cerrando el programa principal...")
 	return true
-}
-
-func (c *client) runExternalCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	return cmd.Run()
 }
 
 // fileManagerMenu permite al usuario gestionar archivos y carpetas.

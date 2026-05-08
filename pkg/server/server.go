@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sprout/pkg/remotecommon"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ type server struct {
 	log           *log.Logger // logger para mensajes de error e información
 	remoteLog     *remoteLogger
 	remoteBackup  *remoteBackupSender
-	mu            sync.Mutex  // Para exclusion a la hora de lectura y escritura
+	mu            sync.Mutex // Para exclusion a la hora de lectura y escritura
 	loginAttempts map[string]*loginAttempt
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
 	sessionKeys   map[string][]byte
@@ -197,13 +198,13 @@ func (s *server) logHTTPReject(action, remoteAddr, message string) {
 	if s == nil || s.remoteLog == nil {
 		return
 	}
-	s.remoteLog.Enqueue(remoteLogEvent{
-		Timestamp: time.Now().UTC(),
-		Level:     "warn",
-		Action:    action,
-		Message:   message,
-		Success:   false,
-		Source:    "sprout",
+	s.remoteLog.Enqueue(remotecommon.LogEvent{
+		Timestamp:  time.Now().UTC(),
+		Level:      "warn",
+		Action:     action,
+		Message:    message,
+		Success:    false,
+		Source:     "sprout",
 		RemoteAddr: remoteAddr,
 	})
 }
@@ -216,7 +217,7 @@ func (s *server) logRequestEvent(req api.Request, res api.Response, remoteAddr s
 	if message == "" {
 		message = "request processed"
 	}
-	s.remoteLog.Enqueue(remoteLogEvent{
+	s.remoteLog.Enqueue(remotecommon.LogEvent{
 		Timestamp:  time.Now().UTC(),
 		Level:      logLevelForResponse(res),
 		Action:     req.Action,

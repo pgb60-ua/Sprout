@@ -15,40 +15,15 @@ import (
 	"time"
 
 	"sprout/pkg/netcfg"
+	"sprout/pkg/remotecommon"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
 
 const (
-	defaultAddrEnv       = "SPROUT_REMOTE_SERVICE_ADDR"
-	defaultDataDirEnv    = "SPROUT_REMOTE_SERVICE_DATA_DIR"
 	defaultListenAddress = ":8081"
 	defaultDataDir       = "data/remote"
 )
-
-type remoteLogEvent struct {
-	Timestamp  time.Time `json:"timestamp"`
-	Level      string    `json:"level"`
-	Action     string    `json:"action"`
-	Username   string    `json:"username,omitempty"`
-	RemoteAddr string    `json:"remote_addr,omitempty"`
-	Path       string    `json:"path,omitempty"`
-	Success    bool      `json:"success"`
-	Message    string    `json:"message"`
-	Source     string    `json:"source"`
-}
-
-type backupFile struct {
-	Path string `json:"path"`
-	Data []byte `json:"data"`
-}
-
-type backupPayload struct {
-	Timestamp time.Time    `json:"timestamp"`
-	Source    string       `json:"source"`
-	DBData    []byte       `json:"db_data"`
-	Files     []backupFile `json:"files"`
-}
 
 type service struct {
 	log     *log.Logger
@@ -58,31 +33,19 @@ type service struct {
 
 func Run() error {
 	cfg := netcfg.Load()
+	addr := getEnv("SPROUT_REMOTE_SERVICE_ADDR", defaultListenAddress)
+	baseDir := getEnv("SPROUT_REMOTE_SERVICE_DATA_DIR", defaultDataDir)
 
-	addr := os.Getenv(defaultAddrEnv)
-	if addr == "" {
-		addr = defaultListenAddress
-	}
-
-	baseDir := os.Getenv(defaultDataDirEnv)
-	if baseDir == "" {
-		baseDir = defaultDataDir
-	}
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		return fmt.Errorf("error creando directorio remoto: %w", err)
+		return err
 	}
 
-	remoteDBPath := filepath.Join(baseDir, "remote.db")
-	db, err := store.NewStore("bbolt", remoteDBPath)
+	db, err := store.NewStore("bbolt", filepath.Join(baseDir, "remote.db"))
 	if err != nil {
-		return fmt.Errorf("error abriendo base remota: %w", err)
+		return err
 	}
 
-	s := &service{
-		log:     log.New(os.Stdout, "[remote] ", log.LstdFlags),
-		db:      db,
-		baseDir: baseDir,
-	}
+	s := &service{log: log.New(os.Stdout, "[remote] ", log.LstdFlags), db: db, baseDir: baseDir}
 	defer s.db.Close()
 
 	mux := http.NewServeMux()
@@ -93,24 +56,18 @@ func Run() error {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
-	}
-
-	if _, err := os.Stat(cfg.TLSCertFile); err != nil {
-		return fmt.Errorf("certificado TLS remoto no disponible en %q: %w", cfg.TLSCertFile, err)
-	}
-	if _, err := os.Stat(cfg.TLSKeyFile); err != nil {
-		return fmt.Errorf("clave TLS remota no disponible en %q: %w", cfg.TLSKeyFile, err)
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
 	s.log.Printf("servicio remoto escuchando en %s", addr)
 	return httpSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
 }
 
-func (s *service) isAuthorized(r *http.Request) bool {
-	return true
+func getEnv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func (s *service) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -122,18 +79,11 @@ func (s *service) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isAuthorized(r) {
-		http.Error(w, "No autorizado", http.StatusUnauthorized)
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	defer r.Body.Close()
 
-	var event remoteLogEvent
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&event); err != nil {
+	var event remotecommon.LogEvent
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
@@ -141,69 +91,46 @@ func (s *service) handleLogs(w http.ResponseWriter, r *http.Request) {
 		event.Timestamp = time.Now().UTC()
 	}
 
-	payload, err := json.Marshal(event)
-	if err != nil {
-		http.Error(w, "No se pudo serializar evento", http.StatusInternalServerError)
-		return
-	}
-
+	payload, _ := json.Marshal(event)
 	key := []byte(fmt.Sprintf("%s-%s", event.Timestamp.UTC().Format(time.RFC3339Nano), randomSuffix()))
 	if err := s.db.Put("logs", key, payload); err != nil {
 		http.Error(w, "No se pudo persistir log", http.StatusInternalServerError)
 		return
 	}
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *service) handleLogsList(w http.ResponseWriter, r *http.Request) {
-	if !s.isAuthorized(r) {
-		http.Error(w, "No autorizado", http.StatusUnauthorized)
-		return
-	}
-
 	limit := 50
 	if q := r.URL.Query().Get("limit"); q != "" {
-		value, err := strconv.Atoi(q)
-		if err != nil || value < 0 {
-			http.Error(w, "limit inválido", http.StatusBadRequest)
-			return
+		if v, err := strconv.Atoi(q); err == nil && v >= 0 {
+			limit = v
 		}
-		limit = value
 	}
 
 	keys, err := s.db.ListKeys("logs")
-	if err != nil {
-		if errors.Is(err, store.ErrNamespaceNotFound) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode([]remoteLogEvent{})
-			return
-		}
+	if err != nil && !errors.Is(err, store.ErrNamespaceNotFound) {
 		http.Error(w, "No se pudieron listar logs", http.StatusInternalServerError)
 		return
 	}
 
-	keyStrings := make([]string, 0, len(keys))
-	for _, k := range keys {
-		keyStrings = append(keyStrings, string(k))
+	keyStrings := make([]string, len(keys))
+	for i, k := range keys {
+		keyStrings[i] = string(k)
 	}
 	sort.Strings(keyStrings)
-
 	if limit > 0 && limit < len(keyStrings) {
 		keyStrings = keyStrings[len(keyStrings)-limit:]
 	}
 
-	events := make([]remoteLogEvent, 0, len(keyStrings))
+	var events []remotecommon.LogEvent
 	for _, k := range keyStrings {
-		raw, err := s.db.Get("logs", []byte(k))
-		if err != nil {
-			continue
+		if raw, err := s.db.Get("logs", []byte(k)); err == nil {
+			var ev remotecommon.LogEvent
+			if json.Unmarshal(raw, &ev) == nil {
+				events = append(events, ev)
+			}
 		}
-		var event remoteLogEvent
-		if err := json.Unmarshal(raw, &event); err != nil {
-			continue
-		}
-		events = append(events, event)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -215,18 +142,11 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Método no permitido", http.StatusMethodNotAllowed)
 		return
 	}
-	if !s.isAuthorized(r) {
-		http.Error(w, "No autorizado", http.StatusUnauthorized)
-		return
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, 20<<20)
 	defer r.Body.Close()
 
-	var req backupPayload
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	var req remotecommon.BackupPayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "JSON inválido", http.StatusBadRequest)
 		return
 	}
@@ -236,74 +156,49 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 
 	backupID := fmt.Sprintf("%s-%s", req.Timestamp.UTC().Format("20060102T150405.000000000Z"), randomSuffix())
 	backupDir := filepath.Join(s.baseDir, "backups", backupID)
-	if err := os.MkdirAll(backupDir, 0700); err != nil {
-		http.Error(w, "No se pudo crear directorio de backup", http.StatusInternalServerError)
-		return
-	}
+	os.MkdirAll(backupDir, 0700)
 
 	if err := os.WriteFile(filepath.Join(backupDir, "server.db"), req.DBData, 0600); err != nil {
 		http.Error(w, "No se pudo guardar DB", http.StatusInternalServerError)
 		return
 	}
-
-	filesBaseDir := filepath.Join(backupDir, "files")
 	for _, f := range req.Files {
-		cleanPath, err := sanitizeRelativePath(f.Path)
-		if err != nil {
+		if cleanPath, err := sanitizeRelativePath(f.Path); err == nil {
+			target := filepath.Join(backupDir, "files", cleanPath)
+			os.MkdirAll(filepath.Dir(target), 0700)
+			if err := os.WriteFile(target, f.Data, 0600); err != nil {
+				http.Error(w, "No se pudo guardar fichero de backup", http.StatusInternalServerError)
+				return
+			}
+		} else {
 			http.Error(w, "Path inválido en backup", http.StatusBadRequest)
 			return
 		}
-		target := filepath.Join(filesBaseDir, cleanPath)
-		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-			http.Error(w, "No se pudo crear estructura de backup", http.StatusInternalServerError)
-			return
-		}
-		if err := os.WriteFile(target, f.Data, 0600); err != nil {
-			http.Error(w, "No se pudo guardar fichero de backup", http.StatusInternalServerError)
-			return
-		}
 	}
 
-	metadata := map[string]any{
-		"id":         backupID,
-		"timestamp":  req.Timestamp.UTC(),
-		"source":     req.Source,
-		"db_bytes":   len(req.DBData),
-		"files_count": len(req.Files),
-	}
-	metaDataRaw, err := json.Marshal(metadata)
-	if err != nil {
-		http.Error(w, "No se pudo serializar metadata", http.StatusInternalServerError)
-		return
-	}
-	if err := s.db.Put("backups_meta", []byte(backupID), metaDataRaw); err != nil {
+	meta, _ := json.Marshal(map[string]any{
+		"id": backupID, "timestamp": req.Timestamp.UTC(), "source": req.Source,
+		"db_bytes": len(req.DBData), "files_count": len(req.Files),
+	})
+	if err := s.db.Put("backups_meta", []byte(backupID), meta); err != nil {
 		http.Error(w, "No se pudo persistir metadata", http.StatusInternalServerError)
 		return
 	}
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
 func sanitizeRelativePath(p string) (string, error) {
 	clean := filepath.Clean(p)
-	if clean == "." || clean == string(filepath.Separator) {
-		return "", errors.New("path vacío")
-	}
-	if filepath.IsAbs(clean) {
-		return "", errors.New("path no permitido")
-	}
-	for _, part := range strings.Split(clean, string(filepath.Separator)) {
-		if part == ".." {
-			return "", errors.New("path no permitido")
-		}
+	if clean == "." || clean == string(filepath.Separator) || filepath.IsAbs(clean) || strings.Contains(clean, "..") {
+		return "", errors.New("path no permitido o inválido")
 	}
 	return clean, nil
 }
 
 func randomSuffix() string {
-	token, err := utils.NewRandomToken(8)
+	tok, err := utils.NewRandomToken(8)
 	if err != nil {
 		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
 	}
-	return token
+	return tok
 }
