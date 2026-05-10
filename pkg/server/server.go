@@ -128,6 +128,17 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.updateData(req)
 	case api.ActionLogout:
 		res = s.logoutUser(req)
+	// MESSAGES
+	case api.ActionGetPublicKey:
+		res = s.getPublicKey(req)
+	case api.ActionSendMessage:
+		res = s.sendMessage(req)
+	case api.ActionListMessages:
+		res = s.listMessages(req)
+	case api.ActionReadMessage:
+		res = s.readMessage(req)
+	case api.ActionListSentMessages:
+		res = s.listSentMessages(req)
 	// FILES
 	case api.ActionCreateFile:
 		res = s.createFile(req)
@@ -173,6 +184,12 @@ func (s *server) registerUser(req api.Request) api.Response {
 	if err := utils.ValidatePassword(req.Password); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	if req.PublicKey == "" {
+		return api.Response{Success: false, Message: "Falta clave publica de mensajes"}
+	}
+	if _, err := utils.DecodeMessagePublicKey(req.PublicKey); err != nil {
+		return api.Response{Success: false, Message: "Clave publica de mensajes invalida"}
+	}
 
 	exists, err := s.userExists(req.Username)
 	if err != nil {
@@ -212,6 +229,10 @@ func (s *server) registerUser(req api.Request) api.Response {
 
 	if err := s.db.Put("userdata", []byte(req.Username), encryptedUserdata); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
+	}
+
+	if err := s.db.Put(publicKeysNamespace, []byte(req.Username), []byte(req.PublicKey)); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}

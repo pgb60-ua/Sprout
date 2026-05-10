@@ -13,6 +13,7 @@ import (
 
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"sprout/pkg/utils"
 )
 
 func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
@@ -69,6 +70,20 @@ func postJSON(t *testing.T, client *http.Client, url string, v any) (*http.Respo
 	return resp, ar
 }
 
+func newTestPublicKey(t *testing.T) string {
+	t.Helper()
+
+	publicKey, _, err := utils.GenerateMessageKeyPair()
+	if err != nil {
+		t.Fatalf("no se pudo generar clave publica de test: %v", err)
+	}
+	encoded, err := utils.EncodeMessagePublicKey(publicKey)
+	if err != nil {
+		t.Fatalf("no se pudo codificar clave publica de test: %v", err)
+	}
+	return encoded
+}
+
 func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
@@ -76,9 +91,10 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r1 := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:    api.ActionRegister,
+		Username:  "alice",
+		Password:  "password123",
+		PublicKey: newTestPublicKey(t),
 	})
 	if !r1.Success {
 		t.Fatalf("register fallo: %s", r1.Message)
@@ -174,9 +190,10 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, registerRes := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:    api.ActionRegister,
+		Username:  "alice",
+		Password:  "password123",
+		PublicKey: newTestPublicKey(t),
 	})
 	if !registerRes.Success {
 		t.Fatalf("register fallo: %s", registerRes.Message)
@@ -236,5 +253,142 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 	})
 	if !readRes.Success || readRes.Data != "secreto-en-fichero" {
 		t.Fatalf("readFile fallo: success=%v msg=%q data=%q", readRes.Success, readRes.Message, readRes.Data)
+	}
+}
+
+func TestServer_MessageFlowAndAccessControl(t *testing.T) {
+	ts, _, dbPath := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	alicePublic, _, err := utils.GenerateMessageKeyPair()
+	if err != nil {
+		t.Fatalf("no se pudieron generar claves de alice: %v", err)
+	}
+	alicePublicEncoded, err := utils.EncodeMessagePublicKey(alicePublic)
+	if err != nil {
+		t.Fatalf("no se pudo codificar clave de alice: %v", err)
+	}
+	bobPublic, bobPrivate, err := utils.GenerateMessageKeyPair()
+	if err != nil {
+		t.Fatalf("no se pudieron generar claves de bob: %v", err)
+	}
+	bobPublicEncoded, err := utils.EncodeMessagePublicKey(bobPublic)
+	if err != nil {
+		t.Fatalf("no se pudo codificar clave de bob: %v", err)
+	}
+
+	_, aliceRegister := postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionRegister,
+		Username:  "alice",
+		Password:  "password123",
+		PublicKey: alicePublicEncoded,
+	})
+	if !aliceRegister.Success {
+		t.Fatalf("register alice fallo: %s", aliceRegister.Message)
+	}
+	_, bobRegister := postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionRegister,
+		Username:  "bob",
+		Password:  "password123",
+		PublicKey: bobPublicEncoded,
+	})
+	if !bobRegister.Success {
+		t.Fatalf("register bob fallo: %s", bobRegister.Message)
+	}
+
+	_, aliceLogin := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !aliceLogin.Success {
+		t.Fatalf("login alice fallo: %s", aliceLogin.Message)
+	}
+	_, bobLogin := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "bob",
+		Password: "password123",
+	})
+	if !bobLogin.Success {
+		t.Fatalf("login bob fallo: %s", bobLogin.Message)
+	}
+
+	_, keyRes := postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionGetPublicKey,
+		Username:  "alice",
+		Token:     aliceLogin.Token,
+		Recipient: "bob",
+	})
+	if !keyRes.Success || keyRes.PublicKey != bobPublicEncoded {
+		t.Fatalf("getPublicKey fallo: success=%v msg=%q key=%q", keyRes.Success, keyRes.Message, keyRes.PublicKey)
+	}
+
+	recipientPublicKey, err := utils.DecodeMessagePublicKey(keyRes.PublicKey)
+	if err != nil {
+		t.Fatalf("clave publica invalida: %v", err)
+	}
+	ciphertext, err := utils.EncryptMessage("hola bob", recipientPublicKey)
+	if err != nil {
+		t.Fatalf("cifrado fallo: %v", err)
+	}
+
+	_, sendRes := postJSON(t, httpClient, apiURL, api.Request{
+		Action:     api.ActionSendMessage,
+		Username:   "alice",
+		Token:      aliceLogin.Token,
+		Recipient:  "bob",
+		Ciphertext: ciphertext,
+	})
+	if !sendRes.Success || sendRes.MessageID == "" {
+		t.Fatalf("sendMessage fallo: success=%v msg=%q id=%q", sendRes.Success, sendRes.Message, sendRes.MessageID)
+	}
+
+	_, listRes := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListMessages,
+		Username: "bob",
+		Token:    bobLogin.Token,
+	})
+	if !listRes.Success || len(listRes.Messages) != 1 {
+		t.Fatalf("listMessages fallo: success=%v msg=%q len=%d", listRes.Success, listRes.Message, len(listRes.Messages))
+	}
+	if listRes.Messages[0].Sender != "alice" || listRes.Messages[0].Recipient != "bob" {
+		t.Fatalf("summary inesperado: %+v", listRes.Messages[0])
+	}
+
+	_, readRes := postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionReadMessage,
+		Username:  "bob",
+		Token:     bobLogin.Token,
+		MessageID: sendRes.MessageID,
+	})
+	if !readRes.Success || readRes.Ciphertext == "" {
+		t.Fatalf("readMessage fallo: success=%v msg=%q", readRes.Success, readRes.Message)
+	}
+	plaintext, err := utils.DecryptMessage(readRes.Ciphertext, bobPrivate)
+	if err != nil {
+		t.Fatalf("descifrado de bob fallo: %v", err)
+	}
+	if plaintext != "hola bob" {
+		t.Fatalf("plaintext inesperado: %q", plaintext)
+	}
+
+	_, aliceRead := postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionReadMessage,
+		Username:  "alice",
+		Token:     aliceLogin.Token,
+		MessageID: sendRes.MessageID,
+	})
+	if aliceRead.Success {
+		t.Fatal("alice no deberia poder leer el mensaje recibido por bob")
+	}
+
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer server.db: %v", err)
+	}
+	if strings.Contains(string(dbBytes), "hola bob") {
+		t.Fatal("el mensaje quedo en claro en server.db")
 	}
 }
