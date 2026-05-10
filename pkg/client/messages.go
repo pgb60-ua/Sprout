@@ -13,7 +13,6 @@ func (c *client) messageMenu() {
 		ui.ClearScreen()
 		choice := ui.PrintMenu("Mensajes", []string{
 			"Ver mensajes recibidos",
-			"Leer mensaje",
 			"Enviar mensaje",
 			"Ver mensajes enviados",
 			"Volver al menú principal",
@@ -21,21 +20,38 @@ func (c *client) messageMenu() {
 
 		switch choice {
 		case 1:
-			c.listMessages(false)
+			c.inboxMenu()
 		case 2:
-			c.readMessage()
-		case 3:
 			c.sendMessage()
-		case 4:
+		case 3:
 			c.listMessages(true)
-		case 5:
+		case 4:
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
 	}
 }
 
-func (c *client) listMessages(sent bool) {
+func (c *client) inboxMenu() {
+	for {
+		if !c.listMessages(false) {
+			return
+		}
+
+		messageID := ui.ReadInput("ID del mensaje o 'volver'")
+		if messageID == "volver" {
+			return
+		}
+		if messageID == "" {
+			continue
+		}
+
+		c.readMessageByID(messageID)
+		ui.Pause("Pulsa [Enter] para volver al listado...")
+	}
+}
+
+func (c *client) listMessages(sent bool) bool {
 	action := api.ActionListMessages
 	title := "** Mensajes recibidos **"
 	if sent {
@@ -54,15 +70,16 @@ func (c *client) listMessages(sent bool) {
 	fmt.Println("Mensaje:", res.Message)
 	if !res.Success {
 		c.handleSessionExpired(res)
-		return
+		return false
 	}
 	if len(res.Messages) == 0 {
 		fmt.Println("No hay mensajes.")
-		return
+		return false
 	}
 	for _, msg := range res.Messages {
 		fmt.Printf("- ID: %s | De: %s | Para: %s | Fecha: %s\n", msg.ID, msg.Sender, msg.Recipient, msg.CreatedAt)
 	}
+	return true
 }
 
 func (c *client) readMessage() {
@@ -74,6 +91,10 @@ func (c *client) readMessage() {
 	}
 
 	messageID := ui.ReadInput("ID del mensaje")
+	c.readMessageByID(messageID)
+}
+
+func (c *client) readMessageByID(messageID string) {
 	res := c.sendRequest(api.Request{
 		Action:    api.ActionReadMessage,
 		Username:  c.currentUser,
