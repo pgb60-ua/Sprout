@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"sprout/pkg/api"
 	"sprout/pkg/store"
+	"sprout/pkg/utils"
 )
 
 func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
@@ -37,6 +39,8 @@ func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 		db:            db,
 		loginAttempts: make(map[string]*loginAttempt),
 		sessionKeys:   make(map[string][]byte),
+		pendingTOTP:   make(map[string]pendingTOTPLogin),
+		pendingKey:    make(map[string]pendingKeyLogin),
 	}
 
 	t.Cleanup(func() { _ = db.Close() })
@@ -236,5 +240,163 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 	})
 	if !readRes.Success || readRes.Data != "secreto-en-fichero" {
 		t.Fatalf("readFile fallo: success=%v msg=%q data=%q", readRes.Success, readRes.Message, readRes.Data)
+	}
+}
+func TestServer_KeyAuthSetupAndLogin(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	pub, priv, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: pub,
+	})
+	if !r.Success {
+		t.Fatalf("keySetup falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success || !r.RequiresKey || r.TempToken == "" || len(r.Challenge) == 0 {
+		t.Fatalf("login debería devolver RequiresKey: success=%v requires_key=%v msg=%q", r.Success, r.RequiresKey, r.Message)
+	}
+
+	signature := ed25519.Sign(priv, r.Challenge)
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionLoginKey,
+		TempToken: r.TempToken,
+		Signature: signature,
+	})
+	if !r.Success || r.Token == "" {
+		t.Fatalf("loginKey falló: success=%v msg=%q token=%q", r.Success, r.Message, r.Token)
+	}
+}
+
+func TestServer_KeyAuthInvalidSignature(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	pub, _, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+	_, wrongPriv, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (2) falló: %v", err)
+	}
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: pub,
+	})
+	if !r.Success {
+		t.Fatalf("keySetup falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.RequiresKey {
+		t.Fatalf("login debería devolver RequiresKey")
+	}
+
+	wrongSig := ed25519.Sign(wrongPriv, r.Challenge)
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionLoginKey,
+		TempToken: r.TempToken,
+		Signature: wrongSig,
+	})
+	if r.Success {
+		t.Fatal("loginKey debería fallar con firma incorrecta")
+	}
+}
+
+func TestServer_KeyAuthInvalidPublicKeySize(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: []byte("clave-corta"),
+	})
+	if r.Success {
+		t.Fatal("keySetup debería fallar con clave pública de tamaño incorrecto")
 	}
 }

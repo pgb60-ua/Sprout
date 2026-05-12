@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"sprout/pkg/api"
 	"sprout/pkg/utils"
@@ -46,7 +47,7 @@ func (s *server) keySetup(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
 		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
 	}
-	if len(req.PublicKey) == 0 {
+	if len(req.PublicKey) != ed25519.PublicKeySize {
 		return api.Response{Success: false, Message: "Clave publica no proporcionada"}
 	}
 	kd := keyAuthData{Enabled: true, PublicKey: req.PublicKey}
@@ -88,12 +89,16 @@ func (s *server) loginKey(req api.Request) api.Response {
 
 	kd, err := s.getKeyAuthData(pending.Username)
 	if err != nil || !kd.Enabled {
-		return api.Response{Success: false, Message: "Firma invalida"}
+		return api.Response{Success: false, Message: "El usuario no tiene autenticacion por clave activa"}
 	}
 
 	s.mu.Lock()
 	delete(s.pendingKey, req.TempToken)
 	s.mu.Unlock()
+
+	if !utils.VerifySignature(kd.PublicKey, pending.Challenge, req.Signature) {
+		return api.Response{Success: false, Message: "Firma invalida"}
+	}
 
 	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {

@@ -305,10 +305,11 @@ func (s *server) loginUser(req api.Request) api.Response {
 			ExpiresAt: time.Now().Add(temporalTokenDuration),
 		}
 		s.mu.Unlock()
-		return api.Response{Success: false, RequiresKey: true, TempToken: tempToken, Challenge: []byte(challenge)}
+		s.storeSessionKey(req.Username, dek)
+		return api.Response{Success: true, RequiresKey: true, TempToken: tempToken, Challenge: []byte(challenge)}
 	}
 
-	//Sin TOTP - creo la sesion
+	//Sin TOTP ni clave publica - creo la sesion
 	// Generamos un nuevo token, lo guardamos en 'sessions'
 	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
