@@ -207,9 +207,6 @@ func (c *client) loginUser() {
 		Password: password,
 	})
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-
 	if !res.Success {
 		return
 	}
@@ -234,12 +231,7 @@ func (c *client) loginUser() {
 
 	// Si tiene clave publica
 	if res.RequiresKey {
-		// Pido contraseña para descifrar la clave privada
-		password, err := ui.ReadPassword("Introduce contraseña para firmar")
-		if err != nil {
-			fmt.Println("Error leyendo la contraseña")
-			return
-		}
+
 		// Descifro la clave privada del disco
 		priv, err := utils.DecryptPrivateKey(password, username)
 		if err != nil {
