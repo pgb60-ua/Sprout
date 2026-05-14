@@ -15,10 +15,12 @@ func Run() {
 	dbPath, endpoint, caFile := "data/remote/remote.db", "https://localhost:8081/logs", "data/certs/ca-cert.pem"
 	entries := make(map[string][]byte)
 
-	if db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{ReadOnly: true, Timeout: time.Second}); err == nil {
+	db, err := bbolt.Open(dbPath, 0600, &bbolt.Options{ReadOnly: true, Timeout: time.Second})
+	if err == nil {
 		defer db.Close()
-		_ = db.View(func(tx *bbolt.Tx) error {
-			if b := tx.Bucket([]byte("logs")); b != nil {
+		err = db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte("logs"))
+			if b != nil {
 				c := b.Cursor()
 				for k, v := c.First(); k != nil; k, v = c.Next() {
 					entries[string(k)] = append([]byte(nil), v...)
@@ -26,46 +28,89 @@ func Run() {
 			}
 			return nil
 		})
-	} else if cli, e := remotecommon.NewHTTPClient(endpoint, caFile, 3*time.Second); e == nil {
-		if req, _ := http.NewRequest("GET", endpoint+"?limit=50", nil); req != nil {
-			if resp, e2 := cli.Do(req); e2 == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode < 400 {
-					var evs []remotecommon.LogEvent
-					if json.NewDecoder(resp.Body).Decode(&evs) == nil {
-						for i, ev := range evs {
-							if raw, e3 := json.Marshal(ev); e3 == nil {
-								entries[fmt.Sprintf("%03d-%s", i, ev.Timestamp.UTC().Format(time.RFC3339Nano))] = raw
-							}
-						}
-					}
-				}
-			}
+		if err != nil {
+			fmt.Printf("Error leyendo bucket de base de datos bbolt: %v\n", err)
+			return
 		}
 	} else {
-		fmt.Printf("No se pudo leer la base de logs remotos ni obtenerlos por HTTP: %v\n", err)
-		return
+		cli, err := remotecommon.NewHTTPClient(endpoint, caFile, 3*time.Second)
+		if err != nil {
+			fmt.Printf("No se pudo leer la base de logs remota ni crear el cliente HTTP: %v\n", err)
+			return
+		}
+
+		req, err := http.NewRequest("GET", endpoint+"?limit=50", nil)
+		if err != nil {
+			fmt.Printf("Error preparando petición HTTP: %v\n", err)
+			return
+		}
+
+		resp, err := cli.Do(req)
+		if err != nil {
+			fmt.Printf("No se pudo obtener logs mediante HTTP: %v\n", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			fmt.Printf("El servidor remoto de logs respondió con un código de error: %s\n", resp.Status)
+			return
+		}
+
+		var evs []remotecommon.LogEvent
+		if err := json.NewDecoder(resp.Body).Decode(&evs); err != nil {
+			fmt.Printf("Error decodificando los logs desde servidor: %v\n", err)
+			return
+		}
+
+		for i, ev := range evs {
+			raw, marshalErr := json.Marshal(ev)
+			if marshalErr != nil {
+				fmt.Printf("Error serializando evento log internamente: %v\n", marshalErr)
+				continue
+			}
+			entries[fmt.Sprintf("%03d-%s", i, ev.Timestamp.UTC().Format(time.RFC3339Nano))] = raw
+		}
 	}
 
 	keys := make([]string, 0, len(entries))
-	for k := range entries { keys = append(keys, k) }
+	for k := range entries {
+		keys = append(keys, k)
+	}
 	
 	if len(keys) == 0 {
 		fmt.Println("No hay logs remotos guardados.")
 		return
 	}
+	
 	sort.Strings(keys)
 
-	if len(keys) > 50 { keys = keys[len(keys)-50:] }
+	if len(keys) > 50 {
+		keys = keys[len(keys)-50:]
+	}
 
 	for _, k := range keys {
 		var ev remotecommon.LogEvent
-		if json.Unmarshal(entries[k], &ev) == nil {
-			fmt.Printf("%s level=%s action=%s user=%s success=%t ip=%s path=%s msg=%s\n",
-				ev.Timestamp.UTC().Format(time.RFC3339), ev.Level, ev.Action, 
-				func(s string) string { if s == "" { return "-" }; return s }(ev.Username), ev.Success, 
-				func(s string) string { if s == "" { return "-" }; return s }(ev.RemoteAddr), 
-				func(s string) string { if s == "" { return "-" }; return s }(ev.Path), ev.Message)
+		if err := json.Unmarshal(entries[k], &ev); err != nil {
+			fmt.Printf("Error deserializando log local: %v\n", err)
+			continue
 		}
+
+		fmt.Printf("%s level=%s action=%s user=%s success=%t ip=%s path=%s msg=%s\n",
+			ev.Timestamp.UTC().Format(time.RFC3339),
+			ev.Level,
+			ev.Action, 
+			valOr(ev.Username, "-"),
+			ev.Success, 
+			valOr(ev.RemoteAddr, "-"), 
+			valOr(ev.Path, "-"),
+			ev.Message)
 	}
+}
+
+func valOr(val, fallback string) string {
+	if val == "" {
+		return fallback
+	}
+	return val
 }

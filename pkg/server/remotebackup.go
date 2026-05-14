@@ -61,30 +61,70 @@ func (r *remoteBackupSender) Close() {
 func (r *remoteBackupSender) send(attempts int, delay time.Duration) {
 	if r == nil { return }
 	for i := 1; i <= attempts; i++ {
-		dbRaw, errDB := os.ReadFile(r.dbPath)
-		var files []remotecommon.BackupFile
-		if errDB == nil {
-			filepath.WalkDir(r.filesRoot, func(path string, info fs.DirEntry, err error) error {
-				if err == nil && !info.IsDir() {
-					if relPath, errRel := filepath.Rel(r.filesRoot, path); errRel == nil {
-						if raw, errRead := os.ReadFile(path); errRead == nil { files = append(files, remotecommon.BackupFile{Path: relPath, Data: raw}) }
-					}
-				}
-				return nil
-			})
+		err := r.attemptSend()
+		if err == nil {
+			return
 		}
-		if errDB == nil {
-			if raw, jsonErr := json.Marshal(remotecommon.BackupPayload{Timestamp: time.Now().UTC(), Source: "sprout", DBData: dbRaw, Files: files}); jsonErr == nil {
-				if req, reqErr := http.NewRequest("POST", r.endpoint, bytes.NewReader(raw)); reqErr == nil {
-					req.Header.Set("Content-Type", "application/json")
-					if resp, callErr := r.client.Do(req); callErr == nil && resp.StatusCode < 400 {
-						if resp != nil { resp.Body.Close() }
-						return
-					} else if callErr != nil { errDB = callErr } else { errDB = fmt.Errorf("codigo erroneo %s", resp.Status); resp.Body.Close() }
-				}
-			}
+		if r.local != nil && i == attempts {
+			r.local.Printf("no se pudo enviar backup remoto tras %d intentos: %v", attempts, err)
 		}
-		if r.local != nil && i == attempts { r.local.Printf("no se pudo enviar backup remoto tras %d intentos: %v", attempts, errDB) }
-		select { case <-r.closed: return; case <-time.After(delay): }
+		select {
+		case <-r.closed: 
+			return
+		case <-time.After(delay):
+		}
 	}
+}
+
+func (r *remoteBackupSender) attemptSend() error {
+	dbRaw, err := os.ReadFile(r.dbPath)
+	if err != nil {
+		return err
+	}
+
+	var files []remotecommon.BackupFile
+	_ = filepath.WalkDir(r.filesRoot, func(path string, info fs.DirEntry, walkErr error) error {
+		if walkErr != nil || info.IsDir() {
+			return nil
+		}
+		relPath, err := filepath.Rel(r.filesRoot, path)
+		if err != nil {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		files = append(files, remotecommon.BackupFile{Path: relPath, Data: raw})
+		return nil
+	})
+
+	payload := remotecommon.BackupPayload{
+		Timestamp: time.Now().UTC(),
+		Source:    "sprout",
+		DBData:    dbRaw,
+		Files:     files,
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", r.endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("codigo erroneo %s", resp.Status)
+	}
+	return nil
 }

@@ -68,14 +68,25 @@ func (r *remoteLogger) CloseWithTimeout(timeout time.Duration) {
 
 func (r *remoteLogger) send(event remotecommon.LogEvent) error {
 	event.Source = "sprout"
-	if data, marshalErr := json.Marshal(event); marshalErr == nil {
-		if req, reqErr := http.NewRequest("POST", r.endpoint, bytes.NewReader(data)); reqErr == nil {
-			req.Header.Set("Content-Type", "application/json")
-			if resp, respErr := r.client.Do(req); respErr == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode < 400 { return nil }
-				return fmt.Errorf("codigo erroneo %s", resp.Status)
-			} else { return respErr }
-		} else { return reqErr }
-	} else { return marshalErr }
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", r.endpoint, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("codigo erroneo %s", resp.Status)
+	}
+	return nil
 }
