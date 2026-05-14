@@ -118,7 +118,7 @@ func deriveSubkey(baseKey []byte, context string, size int) ([]byte, error) {
 	return key, nil
 }
 
-func encryptUserdata(baseDEK, plaintext []byte) ([]byte, error) {
+func EncryptUserdata(baseDEK, plaintext []byte) ([]byte, error) {
 	key, err := deriveSubkey(baseDEK, "userdata", dekLen)
 	if err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func encryptUserdata(baseDEK, plaintext []byte) ([]byte, error) {
 	return data, nil
 }
 
-func decryptUserdata(baseDEK, blobBytes []byte) ([]byte, error) {
+func DecryptUserdata(baseDEK, blobBytes []byte) ([]byte, error) {
 	var blob gcmBlob
 	if err := json.Unmarshal(blobBytes, &blob); err != nil {
 		return nil, fmt.Errorf("userdata cifrada invalida: %w", err)

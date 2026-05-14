@@ -16,6 +16,7 @@ import (
 
 	"sprout/pkg/netcfg"
 	"sprout/pkg/remotecommon"
+	"sprout/pkg/server"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -87,6 +88,12 @@ func (s *service) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := []byte(fmt.Sprintf("%s-%s", event.Timestamp.UTC().Format(time.RFC3339Nano), randomSuffix()))
+	
+	encPayload, errEnc := server.EncryptUserdata(remotecommon.GetDEK(), payload)
+	if errEnc == nil {
+		payload = encPayload
+	}
+
 	err = s.db.Put("logs", key, payload)
 	if err != nil {
 		http.Error(w, "No se pudo persistir log", http.StatusInternalServerError)
@@ -121,6 +128,9 @@ func (s *service) handleLogsList(w http.ResponseWriter, r *http.Request) {
 	for _, k := range keyStrings {
 		raw, err := s.db.Get("logs", []byte(k))
 		if err == nil {
+			if decRaw, errDec := server.DecryptUserdata(remotecommon.GetDEK(), raw); errDec == nil {
+				raw = decRaw
+			}
 			var ev remotecommon.LogEvent
 			errUnm := json.Unmarshal(raw, &ev)
 			if errUnm == nil {
@@ -158,6 +168,10 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No se pudo crear directorio de backup", http.StatusInternalServerError)
 		return
 	}
+	encDB, errEnc := server.EncryptUserdata(remotecommon.GetDEK(), req.DBData)
+	if errEnc == nil {
+		req.DBData = encDB
+	}
 	err = os.WriteFile(filepath.Join(backupDir, "server.db"), req.DBData, 0600)
 	if err != nil {
 		http.Error(w, "No se pudo guardar DB", http.StatusInternalServerError)
@@ -174,6 +188,10 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 		if errMkdir != nil {
 			http.Error(w, "No se pudo crear directorio del fichero", http.StatusInternalServerError)
 			return
+		}
+		encFile, errEnc := server.EncryptUserdata(remotecommon.GetDEK(), f.Data)
+		if errEnc == nil {
+			f.Data = encFile
 		}
 		errWrite := os.WriteFile(target, f.Data, 0600)
 		if errWrite != nil {

@@ -9,6 +9,7 @@ import (
 
 	"go.etcd.io/bbolt"
 	"sprout/pkg/remotecommon"
+	"sprout/pkg/server"
 )
 
 func Run() {
@@ -23,6 +24,9 @@ func Run() {
 			if b != nil {
 				c := b.Cursor()
 				for k, v := c.First(); k != nil; k, v = c.Next() {
+					if decV, errDec := server.DecryptUserdata(remotecommon.GetDEK(), v); errDec == nil {
+						v = decV
+					}
 					entries[string(k)] = append([]byte(nil), v...)
 				}
 			}

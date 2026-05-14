@@ -281,7 +281,7 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
 	}
 
-	encryptedUserdata, err := encryptUserdata(dek, []byte(""))
+	encryptedUserdata, err := EncryptUserdata(dek, []byte(""))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar datos iniciales del usuario"}
 	}
@@ -399,7 +399,7 @@ func (s *server) fetchData(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
 	}
 
-	plaintext, err := decryptUserdata(dek, rawData)
+	plaintext, err := DecryptUserdata(dek, rawData)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al descifrar datos del usuario"}
 	}
@@ -425,7 +425,7 @@ func (s *server) updateData(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
 	}
 
-	encrypted, err := encryptUserdata(dek, []byte(req.Data))
+	encrypted, err := EncryptUserdata(dek, []byte(req.Data))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar datos del usuario"}
 	}

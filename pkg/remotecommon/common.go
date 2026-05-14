@@ -1,6 +1,7 @@
 package remotecommon
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -53,3 +54,13 @@ func NewHTTPClient(endpoint, caFile string, timeout time.Duration) (*http.Client
 		},
 	}, nil
 }
+
+func GetDEK() []byte {
+        key := os.Getenv("SPROUT_REMOTE_KEY")
+        if key == "" {
+                key = "default-insecure-remote-key"
+        }
+        h := sha256.Sum256([]byte(key))
+        return h[:]
+}
+

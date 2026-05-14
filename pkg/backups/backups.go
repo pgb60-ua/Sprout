@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"sprout/pkg/server"
+	"sprout/pkg/remotecommon"
 )
 
 type backupInfo struct {
@@ -110,6 +113,11 @@ func Run() {
 		fmt.Printf("El backup no contiene server.db o no se pudo leer: %v\n", err)
 		return
 	}
+	
+	if decDB, errDec := server.DecryptUserdata(remotecommon.GetDEK(), dbSrc); errDec == nil {
+		dbSrc = decDB
+	}
+
 	if err := os.WriteFile(filepath.Join(tmpDir, "server.db"), dbSrc, 0600); err != nil {
 		fmt.Printf("Error escribiendo server.db: %v\n", err)
 		return
@@ -135,6 +143,11 @@ func Run() {
 			if readErr != nil {
 				return readErr
 			}
+			
+			if decFile, errDec := server.DecryptUserdata(remotecommon.GetDEK(), b); errDec == nil {
+				b = decFile
+			}
+
 			if writeErr := os.WriteFile(dst, b, 0600); writeErr != nil {
 				return writeErr
 			}
