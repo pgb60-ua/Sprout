@@ -30,6 +30,10 @@ func keyPath(username string) string {
 	return filepath.Join("data", "keys", hex.EncodeToString(hash[:])+".key")
 }
 
+func VerifySignature(publicKey ed25519.PublicKey, message, signature []byte) bool {
+	return ed25519.Verify(publicKey, message, signature)
+}
+
 func GenerateKeyPair() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 	pk, sk, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

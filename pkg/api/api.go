@@ -15,6 +15,11 @@ const (
 	ActionLoginTOTP   = "loginTOTP"
 	ActionTOTPDisable = "totpDisable"
 
+	// private and public key
+	ActionKeySetup   = "keySetup"
+	ActionKeyDisable = "keyDisable"
+	ActionLoginKey   = "loginKey"
+
 	// File and folder management actions
 	ActionCreateFile = "createFile"
 	ActionDeleteFile = "deleteFile"
@@ -35,6 +40,8 @@ type Request struct {
 	TOTPCode       string `json:"totp_code,omitempty"`
 	TempToken      string `json:"temp_token,omitempty"`
 	ForceNewSecret bool   `json:"force_new_secret,omitempty"`
+	PublicKey      []byte `json:"public_key,omitempty"`
+	Signature      []byte `json:"signature,omitempty"`
 }
 
 type Response struct {
@@ -48,4 +55,7 @@ type Response struct {
 	TempToken      string   `json:"temp_token,omitempty"`
 	OTPAuthURI     string   `json:"otpauth_uri,omitempty"`
 	TOTPEnabled    bool     `json:"totp_enabled,omitempty"`
+	Challenge      []byte   `json:"challenge,omitempty"`
+	KeyAuthEnabled bool     `json:"key_auth_enabled,omitempty"`
+	RequiresKey    bool     `json:"requires_key,omitempty"`
 }
