@@ -683,11 +683,12 @@ func (c *client) setupKey() {
 
 	// Verifico contra el servidor
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionLogin,
+		Action:   api.ActionVerifyPassword,
 		Username: c.currentUser,
+		Token:    c.authToken,
 		Password: password,
 	})
-	if !res.Success && !res.RequiresTOTP && !res.RequiresKey {
+	if !res.Success {
 		fmt.Println("Contraseña incorrecta")
 		return
 	}

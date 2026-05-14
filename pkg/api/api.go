@@ -16,9 +16,10 @@ const (
 	ActionTOTPDisable = "totpDisable"
 
 	// private and public key
-	ActionKeySetup   = "keySetup"
-	ActionKeyDisable = "keyDisable"
-	ActionLoginKey   = "loginKey"
+	ActionKeySetup       = "keySetup"
+	ActionKeyDisable     = "keyDisable"
+	ActionLoginKey       = "loginKey"
+	ActionVerifyPassword = "verifyPassword"
 
 	// File and folder management actions
 	ActionCreateFile = "createFile"

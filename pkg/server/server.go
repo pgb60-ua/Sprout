@@ -161,6 +161,8 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.keyDisable(req)
 	case api.ActionLoginKey:
 		res = s.loginKey(req)
+	case api.ActionVerifyPassword:
+		res = s.verifyPassword(req)
 	default:
 		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
@@ -691,4 +693,22 @@ func (s *server) clearSessionKey(username string) {
 		}
 		delete(s.sessionKeys, username)
 	}
+}
+
+func (s *server) verifyPassword(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+
+	data, err := s.db.Get("auth", []byte(req.Username))
+	if err != nil {
+		return api.Response{Success: false, Message: "Usuario no encontrado"}
+	}
+
+	ok, err := utils.VerifyPassword(req.Password, string(data))
+	if err != nil || !ok {
+		return api.Response{Success: false, Message: "Contraseña incorrecta"}
+	}
+
+	return api.Response{Success: true, Message: "Contraseña correcta"}
 }
