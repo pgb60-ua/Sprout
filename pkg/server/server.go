@@ -702,7 +702,11 @@ func (s *server) verifyPassword(req api.Request) api.Response {
 
 	data, err := s.db.Get("auth", []byte(req.Username))
 	if err != nil {
-		return api.Response{Success: false, Message: "Usuario no encontrado"}
+		if errors.Is(err, store.ErrKeyNotFound) {
+			return api.Response{Success: false, Message: "Contraseña incorrecta"}
+		}
+		s.log.Printf("error obteniendo credenciales de %q: %v", req.Username, err)
+		return api.Response{Success: false, Message: "Error verificando contraseña"}
 	}
 
 	ok, err := utils.VerifyPassword(req.Password, string(data))

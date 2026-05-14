@@ -208,6 +208,7 @@ func (c *client) loginUser() {
 	})
 
 	if !res.Success {
+		fmt.Println("Error de inicio de sesión: ", res.Message)
 		return
 	}
 
@@ -253,7 +254,7 @@ func (c *client) loginUser() {
 		if r.Success {
 			c.currentUser = username
 			c.authToken = r.Token
-			c.keyAuthEnabled = true
+			c.keyAuthEnabled = r.KeyAuthEnabled
 		}
 		return
 	}
@@ -297,6 +298,7 @@ func (c *client) fetchData() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -329,6 +331,7 @@ func (c *client) updateData() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -358,6 +361,7 @@ func (c *client) logoutUser() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 
 	if !res.Success && res.SessionExpired {
@@ -365,6 +369,7 @@ func (c *client) logoutUser() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -680,6 +685,14 @@ func (c *client) setupKey() {
 		Token:    c.authToken,
 		Password: password,
 	})
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		fmt.Println("Sesión expirada")
+		return
+	}
 	if !res.Success {
 		fmt.Println("Contraseña incorrecta")
 		return
@@ -692,12 +705,6 @@ func (c *client) setupKey() {
 		return
 	}
 
-	// Cifro y guardo clave privada en disco
-	if err := utils.EncryptPrivateKey(priv, password, c.currentUser); err != nil {
-		fmt.Println("Error al guardar la clave privada: ", err)
-		return
-	}
-
 	// Envio la clave publica al servidor
 	res = c.sendRequest(api.Request{
 		Action:    api.ActionKeySetup,
@@ -707,9 +714,25 @@ func (c *client) setupKey() {
 	})
 	fmt.Println("Éxito: ", res.Success)
 	fmt.Println("Mensaje: ", res.Message)
-	if res.Success {
-		c.keyAuthEnabled = true
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		fmt.Println("Sesión expirada")
+		return
 	}
+	if !res.Success {
+		return
+	}
+
+	// Cifro y guardo clave privada en disco
+	if err := utils.EncryptPrivateKey(priv, password, c.currentUser); err != nil {
+		fmt.Println("Error al guardar la clave privada: ", err)
+		return
+	}
+
+	c.keyAuthEnabled = true
 }
 
 func (c *client) disableKey() {
@@ -719,10 +742,15 @@ func (c *client) disableKey() {
 		Token:    c.authToken,
 	})
 	fmt.Println("Éxito: ", res.Success)
-	fmt.Println("Message: ", res.Message)
+	fmt.Println("Mensaje: ", res.Message)
 	if res.Success {
+		if err := os.Remove(utils.KeyPath(c.currentUser)); err != nil && !os.IsNotExist(err) {
+			fmt.Println("Error al eliminar la clave privada local:", err)
+			return
+		}
 		c.keyAuthEnabled = false
 	}
+
 }
 
 func (c *client) manageKey() {

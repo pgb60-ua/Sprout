@@ -25,7 +25,7 @@ type keyFile struct {
 	Encrypted []byte `json:"encrypted"`
 }
 
-func keyPath(username string) string {
+func KeyPath(username string) string {
 	hash := sha256.Sum256([]byte(username))
 	return filepath.Join("data", "keys", hex.EncodeToString(hash[:])+".key")
 }
@@ -86,7 +86,7 @@ func EncryptPrivateKey(sk ed25519.PrivateKey, password, username string) error {
 	if err != nil {
 		return fmt.Errorf("error serializando archivo de clave: %w", err)
 	}
-	path := keyPath(username)
+	path := KeyPath(username)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("error creando directorio: %w", err)
 	}
@@ -99,7 +99,7 @@ func EncryptPrivateKey(sk ed25519.PrivateKey, password, username string) error {
 
 func DecryptPrivateKey(password, username string) (ed25519.PrivateKey, error) {
 	// Leo el archivo
-	path := keyPath(username)
+	path := KeyPath(username)
 	fileData, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("error leyendo clave privada: %w", err)

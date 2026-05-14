@@ -445,3 +445,63 @@ func TestServer_VerifyPassword(t *testing.T) {
 		t.Fatal("verifyPassword debería fallar con contraseña incorrecta")
 	}
 }
+func TestServer_VerifyPassword_InvalidToken(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "alice",
+		Token:    "token-invalido",
+		Password: "password123",
+	})
+	if r.Success {
+		t.Fatal("verifyPassword debería fallar con token inválido")
+	}
+}
+
+func TestServer_VerifyPassword_UnknownUser(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "noexiste",
+		Token:    r.Token,
+		Password: "password123",
+	})
+	if r.Success {
+		t.Fatal("verifyPassword debería fallar con usuario inexistente")
+	}
+}
