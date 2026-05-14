@@ -55,12 +55,16 @@ func NewHTTPClient(endpoint, caFile string, timeout time.Duration) (*http.Client
 	}, nil
 }
 
+func GetSharedSecret() string {
+	key := os.Getenv("SPROUT_REMOTE_KEY")
+	if key == "" {
+		return "default-insecure-remote-key"
+	}
+	return key
+}
+
 func GetDEK() []byte {
-        key := os.Getenv("SPROUT_REMOTE_KEY")
-        if key == "" {
-                key = "default-insecure-remote-key"
-        }
-        h := sha256.Sum256([]byte(key))
-        return h[:]
+	h := sha256.Sum256([]byte(GetSharedSecret()))
+	return h[:]
 }
 

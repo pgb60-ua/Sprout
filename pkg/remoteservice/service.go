@@ -47,8 +47,8 @@ func Run() error {
 	}
 	defer s.db.Close()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/logs", s.handleLogs)
-	mux.HandleFunc("/backups", s.handleBackups)
+	mux.HandleFunc("/logs", s.withAuth(s.handleLogs))
+	mux.HandleFunc("/backups", s.withAuth(s.handleBackups))
 
 	s.log.Printf("servicio remoto escuchando en %s", addr)
 	return (&http.Server{
@@ -57,6 +57,18 @@ func Run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}).ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+}
+
+func (s *service) withAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		expected := "Bearer " + remotecommon.GetSharedSecret()
+		if authHeader != expected {
+			http.Error(w, "No autorizado", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func randomSuffix() string { t, _ := utils.NewRandomToken(8); return t }

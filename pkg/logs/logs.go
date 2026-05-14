@@ -47,6 +47,7 @@ func Run() {
 			fmt.Printf("Error preparando petición HTTP: %v\n", err)
 			return
 		}
+		req.Header.Set("Authorization", "Bearer "+remotecommon.GetSharedSecret())
 		resp, err := cli.Do(req)
 		if err != nil {
 			fmt.Printf("No se pudo obtener logs mediante HTTP: %v\n", err)

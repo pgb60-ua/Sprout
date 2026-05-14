@@ -116,6 +116,7 @@ func (r *remoteBackupSender) attemptSend() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+remotecommon.GetSharedSecret())
 
 	resp, err := r.client.Do(req)
 	if err != nil {
