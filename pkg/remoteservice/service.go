@@ -231,7 +231,7 @@ func (s *service) handleBackups(w http.ResponseWriter, r *http.Request) {
 
 func sanitizeRelativePath(p string) (string, error) {
 	clean := filepath.Clean(p)
-	if clean == "." || clean == string(filepath.Separator) || filepath.IsAbs(clean) || strings.Contains(clean, "..") {
+	if clean == "." || clean == string(filepath.Separator) || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
 		return "", errors.New("path no permitido o inválido")
 	}
 	return clean, nil

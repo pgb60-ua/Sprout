@@ -125,7 +125,7 @@ func (r *remoteBackupSender) attemptSend() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("codigo erroneo %s", resp.Status)
+		return fmt.Errorf("Código erróneo %s", resp.Status)
 	}
 	return nil
 }

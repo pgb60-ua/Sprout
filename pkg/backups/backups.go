@@ -11,6 +11,7 @@ import (
 
 	"sprout/pkg/server"
 	"sprout/pkg/remotecommon"
+	"sprout/pkg/ui"
 )
 
 type backupInfo struct {
@@ -78,19 +79,15 @@ func Run() {
 		return backupsList[i].CreatedAt.After(backupsList[j].CreatedAt)
 	})
 
-	fmt.Println("Backups disponibles:")
+	options := make([]string, len(backupsList))
 	for i, b := range backupsList {
-		fmt.Printf("%d) %s  [%s]  %s\n", i+1, b.Name, b.CreatedAt.UTC().Format("2006-01-02 15:04:05"), humanSize(b.SizeBytes))
+		options[i] = fmt.Sprintf("%s  [%s]  %s", b.Name, b.CreatedAt.UTC().Format("2006-01-02 15:04:05"), humanSize(b.SizeBytes))
 	}
+	options = append(options, "Cancelar")
 
-	fmt.Print("Elige un numero: ")
-	var choice int
-	if _, err := fmt.Scanln(&choice); err != nil {
-		fmt.Printf("Opción inválida: %v\n", err)
-		return
-	}
-	if choice < 1 || choice > len(backupsList) {
-		fmt.Println("Opción fuera de rango o cancelada.")
+	choice := ui.PrintMenu("Backups disponibles:", options)
+	if choice == len(options) {
+		fmt.Println("Opción cancelada.")
 		return
 	}
 
@@ -186,11 +183,11 @@ func humanSize(bytes int64) string {
 	}
 	digits := []string{"KiB", "MiB", "GiB", "TiB"}
 	value := float64(bytes)
-	for i, suffix := range digits {
+	for _, suffix := range digits {
 		value /= unit
-		if value < unit || i == len(digits)-1 {
+		if value < unit {
 			return fmt.Sprintf("%.1f %s", value, suffix)
 		}
 	}
-	return fmt.Sprintf("%d B", bytes)
+	return fmt.Sprintf("%.1f %s", value, digits[len(digits)-1])
 }

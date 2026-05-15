@@ -51,7 +51,15 @@ func newRemoteLoggerFromEnv(endpoint, caFile string, local *log.Logger) *remoteL
 
 func (r *remoteLogger) Enqueue(event remotecommon.LogEvent) {
 	if r == nil { return }
-	select { case <-r.closed: case r.events <- event: default: if r.local != nil { r.local.Printf("cola llena; descarta action=%s", event.Action) } }
+	select {
+		case <-r.closed:
+			return
+		default:
+	}
+	select {
+		case r.events <- event:
+		default:
+	}
 }
 
 func (r *remoteLogger) CloseWithTimeout(timeout time.Duration) {
