@@ -4,6 +4,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"sprout/pkg/api"
 	"sprout/pkg/netcfg"
 	"sprout/pkg/ui"
+	"sprout/pkg/utils"
 
 	"github.com/skip2/go-qrcode"
 )
@@ -24,12 +26,13 @@ import (
 // client estructura interna no exportada que controla
 // el estado de la sesión (usuario, token) y logger.
 type client struct {
-	log         *log.Logger
-	currentUser string
-	authToken   string
-	totpEnabled bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
-	httpClient  *http.Client
-	apiEndpoint string
+	log            *log.Logger
+	currentUser    string
+	authToken      string
+	totpEnabled    bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
+	keyAuthEnabled bool // Para saber si tiene la firma publica - privada enabled y cambiar el texto y opciones
+	httpClient     *http.Client
+	apiEndpoint    string
 }
 
 // Run es la única función exportada de este paquete.
@@ -81,12 +84,17 @@ func (c *client) runLoop() {
 			if c.totpEnabled {
 				totpOption = "Gestionar TOTP"
 			}
+			keyOption := "Activar clave publica"
+			if c.keyAuthEnabled {
+				keyOption = "Desactivar clave publica"
+			}
 
 			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
 				totpOption,
+				keyOption,
 				"Gestión de ficheros",
 				"Cerrar sesión",
 				"Salir",
@@ -119,10 +127,12 @@ func (c *client) runLoop() {
 			case 3:
 				c.manageTOTP()
 			case 4:
-				c.fileManagerMenu()
+				c.manageKey()
 			case 5:
-				c.logoutUser()
+				c.fileManagerMenu()
 			case 6:
+				c.logoutUser()
+			case 7:
 				// Opción Salir
 				c.log.Println("Saliendo del cliente...")
 				return
@@ -197,10 +207,8 @@ func (c *client) loginUser() {
 		Password: password,
 	})
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-
 	if !res.Success {
+		fmt.Println("Error de inicio de sesión: ", res.Message)
 		return
 	}
 
@@ -222,7 +230,36 @@ func (c *client) loginUser() {
 		return
 	}
 
-	// Sin TOTP
+	// Si tiene clave publica
+	if res.RequiresKey {
+
+		// Descifro la clave privada del disco
+		priv, err := utils.DecryptPrivateKey(password, username)
+		if err != nil {
+			fmt.Println("Error al descifrar la clave privada:", err)
+			return
+		}
+
+		// Firmo el challenge
+		signature := ed25519.Sign(priv, res.Challenge)
+
+		// Envio la firma al servidor
+		r := c.sendRequest(api.Request{
+			Action:    api.ActionLoginKey,
+			TempToken: res.TempToken,
+			Signature: signature,
+		})
+		fmt.Println("Éxito: ", r.Success)
+		fmt.Println("Mensaje: ", r.Message)
+		if r.Success {
+			c.currentUser = username
+			c.authToken = r.Token
+			c.keyAuthEnabled = r.KeyAuthEnabled
+		}
+		return
+	}
+
+	// Sin TOTP ni clave publica
 	c.currentUser = username
 	c.authToken = res.Token
 	c.totpEnabled = res.TOTPEnabled
@@ -261,6 +298,7 @@ func (c *client) fetchData() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -293,6 +331,7 @@ func (c *client) updateData() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -322,6 +361,7 @@ func (c *client) logoutUser() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 
 	if !res.Success && res.SessionExpired {
@@ -329,6 +369,7 @@ func (c *client) logoutUser() {
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 	}
 }
 
@@ -616,5 +657,106 @@ func (c *client) disableTOTP() {
 	if res.Success {
 		c.totpEnabled = false
 		fmt.Println("TOTP desactivado correctamente")
+	}
+}
+
+func (c *client) setupKey() {
+
+	// Pido contraseña y la verifico porque luego se usará para cifrar
+	password, err := ui.ReadPassword("Introduce tu contraseña de acceso")
+	if err != nil {
+		fmt.Println("Error leyendo la contraseña")
+		return
+	}
+	confirm, err := ui.ReadPassword("Confirma tu contraseña")
+	if err != nil {
+		fmt.Println("Error leyendo la contraseña")
+		return
+	}
+	if password != confirm {
+		fmt.Println("Las contraseñas no coinciden")
+		return
+	}
+
+	// Verifico contra el servidor
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		Password: password,
+	})
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		fmt.Println("Sesión expirada")
+		return
+	}
+	if !res.Success {
+		fmt.Println("Contraseña incorrecta")
+		return
+	}
+
+	// Genero par de claves
+	pub, priv, err := utils.GenerateKeyPair()
+	if err != nil {
+		fmt.Println("Error al generar el par de claves: ", err)
+		return
+	}
+
+	// Envio la clave publica al servidor
+	res = c.sendRequest(api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  c.currentUser,
+		Token:     c.authToken,
+		PublicKey: pub,
+	})
+	fmt.Println("Éxito: ", res.Success)
+	fmt.Println("Mensaje: ", res.Message)
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		fmt.Println("Sesión expirada")
+		return
+	}
+	if !res.Success {
+		return
+	}
+
+	// Cifro y guardo clave privada en disco
+	if err := utils.EncryptPrivateKey(priv, password, c.currentUser); err != nil {
+		fmt.Println("Error al guardar la clave privada: ", err)
+		return
+	}
+
+	c.keyAuthEnabled = true
+}
+
+func (c *client) disableKey() {
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionKeyDisable,
+		Username: c.currentUser,
+		Token:    c.authToken,
+	})
+	fmt.Println("Éxito: ", res.Success)
+	fmt.Println("Mensaje: ", res.Message)
+	if res.Success {
+		if err := os.Remove(utils.KeyPath(c.currentUser)); err != nil && !os.IsNotExist(err) {
+			fmt.Println("Error al eliminar la clave privada local:", err)
+			return
+		}
+		c.keyAuthEnabled = false
+	}
+
+}
+
+func (c *client) manageKey() {
+	if c.keyAuthEnabled {
+		c.disableKey()
+	} else {
+		c.setupKey()
 	}
 }

@@ -17,7 +17,7 @@ func TestMain(m *testing.M) {
 func TestKeyRoundTrip(t *testing.T) {
 	username := "testuser"
 	t.Cleanup(func() {
-		os.Remove(keyPath(username))
+		os.Remove(KeyPath(username))
 	})
 
 	pk, sk, err := GenerateKeyPair()
@@ -50,7 +50,7 @@ func TestKeyRoundTrip(t *testing.T) {
 func TestDecryptWrongPassword(t *testing.T) {
 	username := "testuser2"
 	t.Cleanup(func() {
-		os.Remove(keyPath(username))
+		os.Remove(KeyPath(username))
 	})
 
 	_, sk, err := GenerateKeyPair()
@@ -70,7 +70,7 @@ func TestDecryptWrongPassword(t *testing.T) {
 
 func TestDecryptCorruptFile(t *testing.T) {
 	username := "testuser3"
-	path := keyPath(username)
+	path := KeyPath(username)
 	t.Cleanup(func() {
 		os.Remove(path)
 	})
