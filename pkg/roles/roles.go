@@ -117,25 +117,25 @@ func (rs *RoleStore) DeleteRole(name string) error {
 		}
 
 		bu := tx.Bucket([]byte(bucketUserRoles))
-		if bu != nil {
-			bu.ForEach(func(k, v []byte) error {
-				var ur UserRoles
-				if err := json.Unmarshal(v, &ur); err != nil {
-					return err
-				}
-				i := slices.Index(ur.Roles, name)
-				if i == -1 {
-					return nil
-				}
-				ur.Roles = slices.Delete(ur.Roles, i, i+1)
-				data, err := json.Marshal(ur)
-				if err != nil {
-					return err
-				}
-				return bu.Put(k, data)
-			})
+		if bu == nil {
+			return fmt.Errorf("bucket de user_roles no encontrado")
 		}
-		return nil
+		return bu.ForEach(func(k, v []byte) error {
+			var ur UserRoles
+			if err := json.Unmarshal(v, &ur); err != nil {
+				return err
+			}
+			i := slices.Index(ur.Roles, name)
+			if i == -1 {
+				return nil
+			}
+			ur.Roles = slices.Delete(ur.Roles, i, i+1)
+			data, err := json.Marshal(ur)
+			if err != nil {
+				return err
+			}
+			return bu.Put(k, data)
+		})
 	})
 }
 
@@ -188,6 +188,7 @@ func getUserRoles(tx *bolt.Tx, username string) (UserRoles, error) {
 	if err := json.Unmarshal(data, &ur); err != nil {
 		return UserRoles{}, err
 	}
+	ur.Username = username
 	return ur, nil
 }
 

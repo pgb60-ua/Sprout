@@ -12,12 +12,12 @@ const rolesDBPath = "data/roles.db"
 func main() {
 	if err := os.MkdirAll("data", 0755); err != nil {
 		fmt.Printf("Error creando directorio data : %v\n", err)
-		return
+		os.Exit(1)
 	}
 	rs, err := roles.NewRoleStore(rolesDBPath, false)
 	if err != nil {
 		fmt.Printf("Error abriendo roles.db: %v\n", err)
-		return
+		os.Exit(1)
 	}
 	defer rs.Close()
 
@@ -72,7 +72,7 @@ func listarRoles(rs *roles.RoleStore) {
 
 func crearRol(rs *roles.RoleStore) {
 	defer ui.Pause("Pulsa Enter para continuar...")
-	nombre := ui.ReadInput("Nombre del rol ")
+	nombre := ui.ReadInput("Nombre del rol")
 	if err := rs.CreateRole(nombre); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -82,7 +82,7 @@ func crearRol(rs *roles.RoleStore) {
 
 func eliminarRol(rs *roles.RoleStore) {
 	defer ui.Pause("Pulsa Enter para continuar...")
-	nombre := ui.ReadInput("Nombre del rol a eliminar ")
+	nombre := ui.ReadInput("Nombre del rol a eliminar")
 	if err := rs.DeleteRole(nombre); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -92,8 +92,8 @@ func eliminarRol(rs *roles.RoleStore) {
 
 func asignarRol(rs *roles.RoleStore) {
 	defer ui.Pause("Pulsa Enter para continuar...")
-	usuario := ui.ReadInput("Nombre de usuario ")
-	rol := ui.ReadInput("Rol a asignar ")
+	usuario := ui.ReadInput("Nombre de usuario")
+	rol := ui.ReadInput("Rol a asignar")
 	if err := rs.AssignRole(usuario, rol); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -103,8 +103,8 @@ func asignarRol(rs *roles.RoleStore) {
 
 func quitarRol(rs *roles.RoleStore) {
 	defer ui.Pause("Pulsa Enter para continuar...")
-	usuario := ui.ReadInput("Nombre de usuario ")
-	rol := ui.ReadInput("Rol a quitar ")
+	usuario := ui.ReadInput("Nombre de usuario")
+	rol := ui.ReadInput("Rol a quitar")
 	if err := rs.RemoveRole(usuario, rol); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		return
@@ -114,7 +114,7 @@ func quitarRol(rs *roles.RoleStore) {
 
 func verRolesUsuario(rs *roles.RoleStore) {
 	defer ui.Pause("Pulsa Enter para continuar...")
-	usuario := ui.ReadInput("Nombre de usuario ")
+	usuario := ui.ReadInput("Nombre de usuario")
 	list, err := rs.GetUserRoles(usuario)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
