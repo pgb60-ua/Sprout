@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/roles"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -35,12 +36,23 @@ func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 		t.Fatalf("no se ha podido cambiar al directorio temporal: %v", err)
 	}
 
+	rs := roles.NewRoleStore(db)
+
+	// Crear roles por defecto
+	for _, name := range []string{roles.AdminRole, roles.DefaultRole} {
+		exists, _ := rs.RoleExists(name)
+		if !exists {
+			rs.CreateRole(name)
+		}
+	}
+
 	srv := &server{
 		db:            db,
 		loginAttempts: make(map[string]*loginAttempt),
 		sessionKeys:   make(map[string][]byte),
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
 		pendingKey:    make(map[string]pendingKeyLogin),
+		roles:         rs,
 	}
 
 	t.Cleanup(func() { _ = db.Close() })
