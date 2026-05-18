@@ -40,9 +40,14 @@ func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 
 	// Crear roles por defecto
 	for _, name := range []string{roles.AdminRole, roles.DefaultRole} {
-		exists, _ := rs.RoleExists(name)
+		exists, err := rs.RoleExists(name)
+		if err != nil {
+			t.Fatalf("no se ha podido comprobar si el rol %q existe: %v", name, err)
+		}
 		if !exists {
-			rs.CreateRole(name)
+			if err := rs.CreateRole(name); err != nil {
+				t.Fatalf("no se ha podido crear el rol %q: %v", name, err)
+			}
 		}
 	}
 

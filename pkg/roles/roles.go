@@ -37,7 +37,7 @@ func NewRoleStore(db store.Store) *RoleStore {
 // Funciones CRUD de roles
 
 func (rs *RoleStore) CreateRole(name string) error {
-	_, err := rs.db.Get("roles", []byte(name))
+	_, err := rs.db.Get(bucketRoles, []byte(name))
 	if err == nil {
 		return fmt.Errorf("el rol '%s' ya existe", name)
 	}
@@ -49,22 +49,22 @@ func (rs *RoleStore) CreateRole(name string) error {
 	if err != nil {
 		return err
 	}
-	return rs.db.Put("roles", []byte(name), data)
+	return rs.db.Put(bucketRoles, []byte(name), data)
 }
 
 func (rs *RoleStore) DeleteRole(name string) error {
-	_, err := rs.db.Get("roles", []byte(name))
+	_, err := rs.db.Get(bucketRoles, []byte(name))
 	if errors.Is(err, store.ErrKeyNotFound) {
 		return fmt.Errorf("el rol '%s' no existe", name)
 	}
 	if err != nil {
 		return err
 	}
-	if err := rs.db.Delete("roles", []byte(name)); err != nil {
+	if err := rs.db.Delete(bucketRoles, []byte(name)); err != nil {
 		return err
 	}
 
-	keys, err := rs.db.ListKeys("user_roles")
+	keys, err := rs.db.ListKeys(bucketUserRoles)
 	if errors.Is(err, store.ErrNamespaceNotFound) {
 		return nil
 	}
@@ -85,7 +85,7 @@ func (rs *RoleStore) DeleteRole(name string) error {
 		if err != nil {
 			return err
 		}
-		if err := rs.db.Put("user_roles", k, data); err != nil {
+		if err := rs.db.Put(bucketUserRoles, k, data); err != nil {
 			return err
 		}
 	}
@@ -93,7 +93,7 @@ func (rs *RoleStore) DeleteRole(name string) error {
 }
 
 func (rs *RoleStore) ListRoles() ([]Role, error) {
-	keys, err := rs.db.ListKeys("roles")
+	keys, err := rs.db.ListKeys(bucketRoles)
 	if errors.Is(err, store.ErrNamespaceNotFound) {
 		return []Role{}, nil
 	}
@@ -102,7 +102,7 @@ func (rs *RoleStore) ListRoles() ([]Role, error) {
 	}
 	var roles []Role
 	for _, k := range keys {
-		data, err := rs.db.Get("roles", k)
+		data, err := rs.db.Get(bucketRoles, k)
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func (rs *RoleStore) ListRoles() ([]Role, error) {
 }
 
 func (rs *RoleStore) RoleExists(name string) (bool, error) {
-	_, err := rs.db.Get("roles", []byte(name))
+	_, err := rs.db.Get(bucketRoles, []byte(name))
 	if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
 		return false, nil
 	}
@@ -129,7 +129,7 @@ func (rs *RoleStore) RoleExists(name string) (bool, error) {
 // Funcion helper
 
 func getUserRoles(db store.Store, username string) (UserRoles, error) {
-	data, err := db.Get("user_roles", []byte(username))
+	data, err := db.Get(bucketUserRoles, []byte(username))
 	if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
 		return UserRoles{Username: username, Roles: []string{}}, nil
 	}
@@ -168,7 +168,7 @@ func (rs *RoleStore) AssignRole(username, role string) error {
 	if err != nil {
 		return err
 	}
-	return rs.db.Put("user_roles", []byte(username), data)
+	return rs.db.Put(bucketUserRoles, []byte(username), data)
 }
 
 func (rs *RoleStore) RemoveRole(username, role string) error {
@@ -186,7 +186,7 @@ func (rs *RoleStore) RemoveRole(username, role string) error {
 	if err != nil {
 		return err
 	}
-	return rs.db.Put("user_roles", []byte(username), data)
+	return rs.db.Put(bucketUserRoles, []byte(username), data)
 }
 
 func (rs *RoleStore) GetUserRoles(username string) ([]string, error) {

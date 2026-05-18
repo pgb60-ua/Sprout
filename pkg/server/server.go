@@ -244,7 +244,7 @@ func (s *server) registerUser(req api.Request) api.Response {
 	}
 
 	if err := s.roles.AssignRole(req.Username, roles.DefaultRole); err != nil {
-		s.log.Printf("error asignando rol por defecto a %q: %v", req.Username, err)
+		return api.Response{Success: false, Message: "Error al asignar rol por defecto"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
