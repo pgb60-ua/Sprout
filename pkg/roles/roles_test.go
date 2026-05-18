@@ -3,6 +3,7 @@ package roles
 import (
 	"path/filepath"
 	"slices"
+	"sprout/pkg/store"
 	"testing"
 )
 
@@ -12,27 +13,13 @@ func newTestRoleStore(t *testing.T) *RoleStore {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "roles.db")
 
-	rs, err := NewRoleStore(path, false)
+	db, err := store.NewStore("bbolt", path)
 	if err != nil {
 		t.Fatalf("no se ha podido crear la store de pruebas: %v", err)
 	}
-	t.Cleanup(func() { _ = rs.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
-	return rs
-}
-
-func TestRoleStore_DefaultRolesCreated(t *testing.T) {
-	rs := newTestRoleStore(t)
-
-	for _, name := range []string{AdminRole, DefaultRole} {
-		exists, err := rs.RoleExists(name)
-		if err != nil {
-			t.Fatalf("RoleExists(%q) falló: %v", name, err)
-		}
-		if !exists {
-			t.Fatalf("se esperaba que el rol %q existiera por defecto", name)
-		}
-	}
+	return NewRoleStore(db)
 }
 
 func TestRoleStore_CreateRole(t *testing.T) {
@@ -92,6 +79,10 @@ func TestRoleStore_DeleteRoleNotFound(t *testing.T) {
 func TestRoleStore_ListRoles(t *testing.T) {
 	rs := newTestRoleStore(t)
 
+	if err := rs.CreateRole("moderator"); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
+
 	roles, err := rs.ListRoles()
 	if err != nil {
 		t.Fatalf("ListRoles falló: %v", err)
@@ -102,10 +93,8 @@ func TestRoleStore_ListRoles(t *testing.T) {
 		found[r.Name] = true
 	}
 
-	for _, name := range []string{AdminRole, DefaultRole} {
-		if !found[name] {
-			t.Fatalf("ListRoles debería incluir el rol %q por defecto", name)
-		}
+	if !found["moderator"] {
+		t.Fatal("ListRoles debería incluir el rol 'moderator'")
 	}
 }
 
@@ -120,12 +109,16 @@ func TestRoleStore_RoleExists(t *testing.T) {
 		t.Fatal("RoleExists debería devolver false para un rol inexistente")
 	}
 
-	exists, err = rs.RoleExists(AdminRole)
+	if err := rs.CreateRole("moderator"); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
+
+	exists, err = rs.RoleExists("moderator")
 	if err != nil {
 		t.Fatalf("RoleExists falló: %v", err)
 	}
 	if !exists {
-		t.Fatalf("RoleExists debería devolver true para %q", AdminRole)
+		t.Fatal("RoleExists debería devolver true para un rol existente")
 	}
 }
 
@@ -134,23 +127,25 @@ func TestRoleStore_PersistsOnDisk(t *testing.T) {
 	path := filepath.Join(dir, "roles.db")
 
 	{
-		rs, err := NewRoleStore(path, false)
+		db, err := store.NewStore("bbolt", path)
 		if err != nil {
 			t.Fatalf("open falló: %v", err)
 		}
+		rs := NewRoleStore(db)
 		if err := rs.CreateRole("moderator"); err != nil {
-			_ = rs.Close()
+			_ = db.Close()
 			t.Fatalf("CreateRole falló: %v", err)
 		}
-		_ = rs.Close()
+		_ = db.Close()
 	}
 
 	{
-		rs, err := NewRoleStore(path, false)
+		db, err := store.NewStore("bbolt", path)
 		if err != nil {
 			t.Fatalf("re-open falló: %v", err)
 		}
-		defer rs.Close()
+		defer db.Close()
+		rs := NewRoleStore(db)
 
 		exists, err := rs.RoleExists("moderator")
 		if err != nil {
@@ -165,6 +160,9 @@ func TestRoleStore_PersistsOnDisk(t *testing.T) {
 func TestRoleStore_AssignRole(t *testing.T) {
 	rs := newTestRoleStore(t)
 
+	if err := rs.CreateRole(DefaultRole); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
 	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
 		t.Fatalf("AssignRole falló: %v", err)
 	}
@@ -189,6 +187,9 @@ func TestRoleStore_AssignRoleNotFound(t *testing.T) {
 func TestRoleStore_AssignRoleDuplicate(t *testing.T) {
 	rs := newTestRoleStore(t)
 
+	if err := rs.CreateRole(DefaultRole); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
 	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
 		t.Fatalf("primera AssignRole falló: %v", err)
 	}
@@ -200,6 +201,9 @@ func TestRoleStore_AssignRoleDuplicate(t *testing.T) {
 func TestRoleStore_RemoveRole(t *testing.T) {
 	rs := newTestRoleStore(t)
 
+	if err := rs.CreateRole(DefaultRole); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
 	if err := rs.AssignRole("carlos", DefaultRole); err != nil {
 		t.Fatalf("AssignRole falló: %v", err)
 	}
@@ -241,23 +245,29 @@ func TestRoleStore_UserRolesPersistsOnDisk(t *testing.T) {
 	path := filepath.Join(dir, "roles.db")
 
 	{
-		rs, err := NewRoleStore(path, false)
+		db, err := store.NewStore("bbolt", path)
 		if err != nil {
 			t.Fatalf("open falló: %v", err)
 		}
+		rs := NewRoleStore(db)
+		if err := rs.CreateRole(DefaultRole); err != nil {
+			_ = db.Close()
+			t.Fatalf("CreateRole falló: %v", err)
+		}
 		if err := rs.AssignRole("carlos", DefaultRole); err != nil {
-			_ = rs.Close()
+			_ = db.Close()
 			t.Fatalf("AssignRole falló: %v", err)
 		}
-		_ = rs.Close()
+		_ = db.Close()
 	}
 
 	{
-		rs, err := NewRoleStore(path, false)
+		db, err := store.NewStore("bbolt", path)
 		if err != nil {
 			t.Fatalf("re-open falló: %v", err)
 		}
-		defer rs.Close()
+		defer db.Close()
+		rs := NewRoleStore(db)
 
 		roles, err := rs.GetUserRoles("carlos")
 		if err != nil {

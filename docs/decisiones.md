@@ -116,12 +116,12 @@ Aunque los datos van en la DB principal, la lógica de roles permanece encapsula
 abrir su propia DB.
 Ventaja: lógica testeable de forma independiente, desacoplada del servidor.
 
-### Soporte de transacciones en store.Store (opción B)
+### Atomicidad en operaciones multi-namespace (opción A)
 Al pasar de `*bolt.DB` a `store.Store`, se pierde la atomicidad de operaciones que tocan
-varios buckets (ej. `DeleteRole` borra el rol y limpia `user_roles`).
-Decisión: extender la interfaz `store.Store` con un método `Transaction` implementado
-en `BboltStore`. Alternativas descartadas:
-- **Opción A** (aceptar inconsistencia): demasiado riesgo para operaciones críticas.
+varios namespaces (ej. `DeleteRole` borra el rol y limpia `user_roles`).
+Opciones evaluadas:
+- **Opción A** (aceptar inconsistencia): elegida. Limitación conocida y documentada.
+- **Opción B** (añadir `Transaction` a la interfaz): evaluada e iniciada, descartada por añadir complejidad innecesaria para el scope del proyecto.
 - **Opción C** (acoplarse a bbolt): rompe la abstracción.
 - **Opción D** (operaciones compensatorias): demasiado compleja, propensa a errores.
 
