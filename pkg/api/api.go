@@ -29,6 +29,15 @@ const (
 	ActionCreateDir  = "createDir"
 	ActionDeleteDir  = "deleteDir"
 	ActionListFiles  = "listFiles"
+
+	// Role management
+	// Role management
+	ActionAssignRole   = "assignRole"
+	ActionRemoveRole   = "removeRole"
+	ActionListRoles    = "listRoles"
+	ActionGetUserRoles = "getUserRoles"
+	ActionCreateRole   = "createRole"
+	ActionDeleteRole   = "deleteRole"
 )
 
 type Request struct {
@@ -43,6 +52,8 @@ type Request struct {
 	ForceNewSecret bool   `json:"force_new_secret,omitempty"`
 	PublicKey      []byte `json:"public_key,omitempty"`
 	Signature      []byte `json:"signature,omitempty"`
+	Role           string `json:"role,omitempty"`
+	TargetUser     string `json:"target_user,omitempty"`
 }
 
 type Response struct {
@@ -59,4 +70,5 @@ type Response struct {
 	Challenge      []byte   `json:"challenge,omitempty"`
 	KeyAuthEnabled bool     `json:"key_auth_enabled,omitempty"`
 	RequiresKey    bool     `json:"requires_key,omitempty"`
+	Roles          []string `json:"roles,omitempty"`
 }
