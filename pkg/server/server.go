@@ -369,8 +369,9 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	s.storeSessionKey(req.Username, dek)
+	isAdmin, _ := s.roles.HasRole(req.Username, roles.AdminRole)
 
-	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
+	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false, IsAdmin: isAdmin}
 }
 
 // fetchData verifica el token y retorna el contenido descifrado.

@@ -71,4 +71,5 @@ type Response struct {
 	KeyAuthEnabled bool     `json:"key_auth_enabled,omitempty"`
 	RequiresKey    bool     `json:"requires_key,omitempty"`
 	Roles          []string `json:"roles,omitempty"`
+	IsAdmin        bool     `json:"is_admin,omitempty"`
 }

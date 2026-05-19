@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"sprout/pkg/api"
+	"sprout/pkg/roles"
 	"sprout/pkg/utils"
 	"time"
 )
@@ -157,8 +158,9 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 
 	td.LastCode = req.TOTPCode
 	s.saveTOTPData(pending.Username, td)
+	isAdmin, _ := s.roles.HasRole(pending.Username, roles.AdminRole)
 
-	return api.Response{Success: true, Message: "Login completo", Token: token, TOTPEnabled: true}
+	return api.Response{Success: true, Message: "Login completo", Token: token, TOTPEnabled: true, IsAdmin: isAdmin}
 }
 
 func (s *server) totpDisable(req api.Request) api.Response {

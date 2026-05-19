@@ -146,3 +146,15 @@ Combinar ambos factores en un flujo secuencial es una mejora futura identificada
 ### El usuario elige el factor (mejora futura identificada)
 En vez de que el servidor decida qué factor aplicar, el servidor podría devolver
 los factores disponibles y el cliente preguntaría al usuario cuál usar.
+
+---
+
+## Sistema de autorización
+
+### Estado de admin calculado en login, no en tiempo real
+El servidor incluye `IsAdmin bool` en la respuesta del login. El cliente lo guarda en
+memoria y lo usa para mostrar u ocultar el menú de admin.
+Si el usuario pierde el rol admin mientras tiene sesión activa, el menú seguirá visible
+hasta el siguiente login — pero el servidor rechaza cualquier petición de admin con
+"No autorizado" porque `requireRole` se comprueba en cada petición.
+La seguridad real está en el servidor, no en el cliente.
