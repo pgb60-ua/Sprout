@@ -181,6 +181,20 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.loginKey(req)
 	case api.ActionVerifyPassword:
 		res = s.verifyPassword(req)
+	// Roles management
+	case api.ActionAssignRole:
+		res = s.assignRole(req)
+	case api.ActionRemoveRole:
+		res = s.removeRole(req)
+	case api.ActionListRoles:
+		res = s.listRoles(req)
+	case api.ActionGetUserRoles:
+		res = s.getUserRoles(req)
+	case api.ActionCreateRole:
+		res = s.createRole(req)
+	case api.ActionDeleteRole:
+		res = s.deleteRole(req)
+
 	default:
 		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
