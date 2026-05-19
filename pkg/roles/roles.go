@@ -189,10 +189,33 @@ func (rs *RoleStore) RemoveRole(username, role string) error {
 	return rs.db.Put(bucketUserRoles, []byte(username), data)
 }
 
+// Funciones generales
+
 func (rs *RoleStore) GetUserRoles(username string) ([]string, error) {
 	ur, err := getUserRoles(rs.db, username)
 	if err != nil {
 		return nil, err
 	}
 	return ur.Roles, nil
+}
+
+func (rs *RoleStore) HasRole(username, role string) (bool, error) {
+	roles, err := rs.GetUserRoles(username)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(roles, role), nil
+}
+
+func (rs *RoleStore) HasAnyRole(username string, roles ...string) (bool, error) {
+	userRoles, err := rs.GetUserRoles(username)
+	if err != nil {
+		return false, err
+	}
+	for _, role := range roles {
+		if slices.Contains(userRoles, role) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
