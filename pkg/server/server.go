@@ -77,9 +77,15 @@ func Run() error {
 
 	if cfg.AdminUser != "" {
 		_, err := db.Get("auth", []byte(cfg.AdminUser))
-		if err == nil {
-			ok, _ := rs.HasRole(cfg.AdminUser, roles.AdminRole)
-			if !ok {
+		if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
+			log.Printf("[srv] SPROUT_ADMIN=%q pero el usuario no existe aún en la DB", cfg.AdminUser)
+		} else if err != nil {
+			log.Printf("[srv] error comprobando usuario admin %q: %v", cfg.AdminUser, err)
+		} else {
+			ok, err := rs.HasRole(cfg.AdminUser, roles.AdminRole)
+			if err != nil {
+				log.Printf("[srv] error comprobando rol admin de %q: %v", cfg.AdminUser, err)
+			} else if !ok {
 				if err := rs.AssignRole(cfg.AdminUser, roles.AdminRole); err != nil {
 					log.Printf("[srv] no se pudo asignar rol admin a %q: %v", cfg.AdminUser, err)
 				} else {

@@ -240,7 +240,7 @@ func (c *client) loginUser() {
 		fmt.Println("Éxito:", totopRes.Success)
 		fmt.Println("Mensaje:", totopRes.Message)
 		if totopRes.Success {
-			c.isAdmin = res.IsAdmin
+			c.isAdmin = totopRes.IsAdmin
 			c.currentUser = username
 			c.authToken = totopRes.Token
 			c.totpEnabled = true

@@ -205,6 +205,83 @@ func TestServer_RoleManagement_RequiresAdmin(t *testing.T) {
 	}
 }
 
+func TestServer_BootstrapAdminUserExists(t *testing.T) {
+	ts, rs := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	registerAndLogin(t, httpClient, apiURL, "alice", "password123")
+
+	ok, err := rs.HasRole("alice", roles.AdminRole)
+	if err != nil {
+		t.Fatalf("HasRole falló: %v", err)
+	}
+	if ok {
+		t.Fatal("alice no debería tener rol admin antes del bootstrap")
+	}
+
+	// Simulamos el bootstrap directamente sobre el RoleStore (igual que hace Run con SPROUT_ADMIN)
+	if err := rs.AssignRole("alice", roles.AdminRole); err != nil {
+		t.Fatalf("bootstrap AssignRole falló: %v", err)
+	}
+
+	ok, err = rs.HasRole("alice", roles.AdminRole)
+	if err != nil {
+		t.Fatalf("HasRole tras bootstrap falló: %v", err)
+	}
+	if !ok {
+		t.Fatal("alice debería tener rol admin tras el bootstrap")
+	}
+}
+
+func TestServer_BootstrapAdminUserNotExists(t *testing.T) {
+	_, rs := newRolesTestServer(t)
+
+	// Usuario "noexiste" no está en la DB — el bootstrap no debería asignar nada
+	ok, err := rs.HasRole("noexiste", roles.AdminRole)
+	if err != nil {
+		t.Fatalf("HasRole falló: %v", err)
+	}
+	if ok {
+		t.Fatal("un usuario inexistente no debería tener rol admin")
+	}
+}
+
+func TestServer_RoleManagement_EmptyFieldsRejected(t *testing.T) {
+	ts, rs := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	token := registerAndLogin(t, httpClient, apiURL, "alice", "password123")
+	if err := rs.AssignRole("alice", roles.AdminRole); err != nil {
+		t.Fatalf("AssignRole admin falló: %v", err)
+	}
+
+	cases := []struct {
+		action string
+		req    api.Request
+	}{
+		{api.ActionAssignRole, api.Request{Role: "moderator"}},          // TargetUser vacío
+		{api.ActionAssignRole, api.Request{TargetUser: "bob"}},          // Role vacío
+		{api.ActionRemoveRole, api.Request{Role: "moderator"}},          // TargetUser vacío
+		{api.ActionRemoveRole, api.Request{TargetUser: "bob"}},          // Role vacío
+		{api.ActionCreateRole, api.Request{}},                           // Role vacío
+		{api.ActionDeleteRole, api.Request{}},                           // Role vacío
+	}
+
+	for _, tc := range cases {
+		tc.req.Action = tc.action
+		tc.req.Username = "alice"
+		tc.req.Token = token
+		_, r := postJSON(t, httpClient, apiURL, tc.req)
+		if r.Success {
+			t.Fatalf("acción %q con campos vacíos debería fallar", tc.action)
+		}
+	}
+}
+
 func TestServer_AdminCanCreateAndDeleteRole(t *testing.T) {
 	ts, rs := newRolesTestServer(t)
 	apiURL := ts.URL + "/api"

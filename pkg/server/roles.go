@@ -22,6 +22,9 @@ func (s *server) assignRole(req api.Request) api.Response {
 	if !s.requireRole(req, roles.AdminRole) {
 		return api.Response{Success: false, Message: "No autorizado"}
 	}
+	if req.TargetUser == "" || req.Role == "" {
+		return api.Response{Success: false, Message: "Faltan campos obligatorios"}
+	}
 	if err := s.roles.AssignRole(req.TargetUser, req.Role); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
@@ -32,6 +35,10 @@ func (s *server) removeRole(req api.Request) api.Response {
 	if !s.requireRole(req, roles.AdminRole) {
 		return api.Response{Success: false, Message: "No autorizado"}
 	}
+	if req.TargetUser == "" || req.Role == "" {
+		return api.Response{Success: false, Message: "Faltan campos obligatorios"}
+	}
+
 	if err := s.roles.RemoveRole(req.TargetUser, req.Role); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
@@ -68,6 +75,9 @@ func (s *server) createRole(req api.Request) api.Response {
 	if !s.requireRole(req, roles.AdminRole) {
 		return api.Response{Success: false, Message: "No autorizado"}
 	}
+	if req.Role == "" {
+		return api.Response{Success: false, Message: "Faltan campos obligatorios"}
+	}
 	if err := s.roles.CreateRole(req.Role); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
@@ -77,6 +87,9 @@ func (s *server) createRole(req api.Request) api.Response {
 func (s *server) deleteRole(req api.Request) api.Response {
 	if !s.requireRole(req, roles.AdminRole) {
 		return api.Response{Success: false, Message: "No autorizado"}
+	}
+	if req.Role == "" {
+		return api.Response{Success: false, Message: "Faltan campos obligatorios"}
 	}
 	if err := s.roles.DeleteRole(req.Role); err != nil {
 		return api.Response{Success: false, Message: err.Error()}

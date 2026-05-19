@@ -31,7 +31,6 @@ const (
 	ActionListFiles  = "listFiles"
 
 	// Role management
-	// Role management
 	ActionAssignRole   = "assignRole"
 	ActionRemoveRole   = "removeRole"
 	ActionListRoles    = "listRoles"
