@@ -19,6 +19,7 @@ import (
 
 	"sprout/pkg/api"
 	"sprout/pkg/netcfg"
+	"sprout/pkg/roles"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -32,6 +33,7 @@ type server struct {
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
 	sessionKeys   map[string][]byte
 	pendingKey    map[string]pendingKeyLogin
+	roles         *roles.RoleStore
 }
 
 type session struct {
@@ -58,6 +60,21 @@ func Run() error {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
 
+	// Creamos RoleStore y los roles por defecto
+	rs := roles.NewRoleStore(db)
+
+	for _, name := range []string{roles.AdminRole, roles.DefaultRole} {
+		exists, err := rs.RoleExists(name)
+		if err != nil {
+			return fmt.Errorf("error comprobando rol %q: %w", name, err)
+		}
+		if !exists {
+			if err := rs.CreateRole(name); err != nil {
+				return fmt.Errorf("error creando rol %q: %w", name, err)
+			}
+		}
+	}
+
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
 		db:            db,
@@ -66,6 +83,7 @@ func Run() error {
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
 		sessionKeys:   make(map[string][]byte),
 		pendingKey:    make(map[string]pendingKeyLogin),
+		roles:         rs,
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -223,6 +241,10 @@ func (s *server) registerUser(req api.Request) api.Response {
 
 	if err := s.db.Put("userdata", []byte(req.Username), encryptedUserdata); err != nil {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
+	}
+
+	if err := s.roles.AssignRole(req.Username, roles.DefaultRole); err != nil {
+		return api.Response{Success: false, Message: "Error al asignar rol por defecto"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
