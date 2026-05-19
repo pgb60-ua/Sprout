@@ -387,8 +387,14 @@ func (c *client) maybeOfferDeleteOutOfSyncFile(path string, res api.Response) {
 		Token:    c.authToken,
 		Path:     path,
 	})
-	fmt.Println("Éxito:", deleteRes.Success)
-	fmt.Println("Mensaje:", deleteRes.Message)
+	if !deleteRes.Success {
+		fmt.Println("No se pudo borrar el fichero:", deleteRes.Message)
+		return
+	} else {
+		fmt.Println("Éxito:", deleteRes.Success)
+		fmt.Println("Mensaje:", deleteRes.Message)
+	}
+
 }
 
 func isTimestampMismatchMessage(message string) bool {
