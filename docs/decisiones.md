@@ -158,3 +158,10 @@ Si el usuario pierde el rol admin mientras tiene sesión activa, el menú seguir
 hasta el siguiente login — pero el servidor rechaza cualquier petición de admin con
 "No autorizado" porque `requireRole` se comprueba en cada petición.
 La seguridad real está en el servidor, no en el cliente.
+
+### No se detecta pérdida de admin en tiempo real (decisión consciente)
+Se consideró añadir un campo `Forbidden bool` en `api.Response` para que el servidor lo señalara
+al rechazar una petición de admin, y el cliente limpiara `isAdmin` al recibirlo (patrón análogo
+a `SessionExpired`). Se descartó: añade complejidad en 6 handlers y en el cliente para un caso
+edge (admin se quita sus propios permisos con sesión activa) que es cosmético, no de seguridad.
+El servidor ya rechaza cada petición individualmente mediante `requireRole`.
