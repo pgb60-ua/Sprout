@@ -149,6 +149,24 @@ los factores disponibles y el cliente preguntaría al usuario cuál usar.
 
 ---
 
+## Bootstrap del primer administrador
+
+### Variable de entorno SPROUT_ADMIN
+No hay forma de asignar el rol admin mediante la API sin tener ya un admin (problema del huevo y la gallina).
+Solución: al arrancar el servidor, si la variable de entorno `SPROUT_ADMIN` está definida y el usuario
+existe en la DB, se le asigna el rol `admin` automáticamente (si no lo tenía ya).
+
+Flujo de uso:
+1. Arrancar el servidor sin la variable → registrar el usuario deseado
+2. Parar el servidor
+3. Arrancar con `SPROUT_ADMIN=<usuario>` → el servidor asigna el rol admin al arrancar
+
+Si el usuario no existe en la DB, la variable se ignora silenciosamente.
+Se eligió esta opción sobre "primer usuario registrado = admin" para evitar condiciones de carrera
+y dar control explícito al operador del servidor.
+
+---
+
 ## Sistema de autorización
 
 ### Estado de admin calculado en login, no en tiempo real

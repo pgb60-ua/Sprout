@@ -16,6 +16,7 @@ type Config struct {
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
+	AdminUser   string
 }
 
 func Load() Config {
@@ -25,6 +26,7 @@ func Load() Config {
 		TLSCertFile: envOrDefault("SPROUT_TLS_CERT_FILE", defaultTLSCertFile),
 		TLSKeyFile:  envOrDefault("SPROUT_TLS_KEY_FILE", defaultTLSKeyFile),
 		TLSCAFile:   envOrDefault("SPROUT_TLS_CA_FILE", defaultTLSCAFile),
+		AdminUser:   envOrDefault("SPROUT_ADMIN", ""),
 	}
 }
 

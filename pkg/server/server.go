@@ -75,6 +75,20 @@ func Run() error {
 		}
 	}
 
+	if cfg.AdminUser != "" {
+		_, err := db.Get("auth", []byte(cfg.AdminUser))
+		if err == nil {
+			ok, _ := rs.HasRole(cfg.AdminUser, roles.AdminRole)
+			if !ok {
+				if err := rs.AssignRole(cfg.AdminUser, roles.AdminRole); err != nil {
+					log.Printf("[srv] no se pudo asignar rol admin a %q: %v", cfg.AdminUser, err)
+				} else {
+					log.Printf("[srv] rol admin asignado a %q", cfg.AdminUser)
+				}
+			}
+		}
+	}
+
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
 		db:            db,
