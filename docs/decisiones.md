@@ -146,3 +146,40 @@ Combinar ambos factores en un flujo secuencial es una mejora futura identificada
 ### El usuario elige el factor (mejora futura identificada)
 En vez de que el servidor decida qué factor aplicar, el servidor podría devolver
 los factores disponibles y el cliente preguntaría al usuario cuál usar.
+
+---
+
+## Bootstrap del primer administrador
+
+### Variable de entorno SPROUT_ADMIN
+No hay forma de asignar el rol admin mediante la API sin tener ya un admin (problema del huevo y la gallina).
+Solución: al arrancar el servidor, si la variable de entorno `SPROUT_ADMIN` está definida y el usuario
+existe en la DB, se le asigna el rol `admin` automáticamente (si no lo tenía ya).
+
+Flujo de uso:
+1. Arrancar el servidor sin la variable → registrar el usuario deseado
+2. Parar el servidor
+3. Arrancar con `SPROUT_ADMIN=<usuario>` → el servidor asigna el rol admin al arrancar
+
+Si el usuario no existe en la DB, la variable se ignora silenciosamente.
+Se eligió esta opción sobre "primer usuario registrado = admin" para evitar condiciones de carrera
+y dar control explícito al operador del servidor.
+
+---
+
+## Sistema de autorización
+
+### Estado de admin calculado en login, no en tiempo real
+El servidor incluye `IsAdmin bool` en la respuesta del login. El cliente lo guarda en
+memoria y lo usa para mostrar u ocultar el menú de admin.
+Si el usuario pierde el rol admin mientras tiene sesión activa, el menú seguirá visible
+hasta el siguiente login — pero el servidor rechaza cualquier petición de admin con
+"No autorizado" porque `requireRole` se comprueba en cada petición.
+La seguridad real está en el servidor, no en el cliente.
+
+### No se detecta pérdida de admin en tiempo real (decisión consciente)
+Se consideró añadir un campo `Forbidden bool` en `api.Response` para que el servidor lo señalara
+al rechazar una petición de admin, y el cliente limpiara `isAdmin` al recibirlo (patrón análogo
+a `SessionExpired`). Se descartó: añade complejidad en 6 handlers y en el cliente para un caso
+edge (admin se quita sus propios permisos con sesión activa) que es cosmético, no de seguridad.
+El servidor ya rechaza cada petición individualmente mediante `requireRole`.

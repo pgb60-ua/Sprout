@@ -78,6 +78,26 @@ func Run() error {
 		}
 	}
 
+	if cfg.AdminUser != "" {
+		_, err := db.Get("auth", []byte(cfg.AdminUser))
+		if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
+			log.Printf("[srv] SPROUT_ADMIN=%q pero el usuario no existe aún en la DB", cfg.AdminUser)
+		} else if err != nil {
+			log.Printf("[srv] error comprobando usuario admin %q: %v", cfg.AdminUser, err)
+		} else {
+			ok, err := rs.HasRole(cfg.AdminUser, roles.AdminRole)
+			if err != nil {
+				log.Printf("[srv] error comprobando rol admin de %q: %v", cfg.AdminUser, err)
+			} else if !ok {
+				if err := rs.AssignRole(cfg.AdminUser, roles.AdminRole); err != nil {
+					log.Printf("[srv] no se pudo asignar rol admin a %q: %v", cfg.AdminUser, err)
+				} else {
+					log.Printf("[srv] rol admin asignado a %q", cfg.AdminUser)
+				}
+			}
+		}
+	}
+
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
 		db:            db,
@@ -184,6 +204,20 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.loginKey(req)
 	case api.ActionVerifyPassword:
 		res = s.verifyPassword(req)
+	// Roles management
+	case api.ActionAssignRole:
+		res = s.assignRole(req)
+	case api.ActionRemoveRole:
+		res = s.removeRole(req)
+	case api.ActionListRoles:
+		res = s.listRoles(req)
+	case api.ActionGetUserRoles:
+		res = s.getUserRoles(req)
+	case api.ActionCreateRole:
+		res = s.createRole(req)
+	case api.ActionDeleteRole:
+		res = s.deleteRole(req)
+
 	default:
 		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
@@ -358,8 +392,9 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	s.storeSessionKey(req.Username, dek)
+	isAdmin, _ := s.roles.HasRole(req.Username, roles.AdminRole)
 
-	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
+	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false, IsAdmin: isAdmin}
 }
 
 // fetchData verifica el token y retorna el contenido descifrado.

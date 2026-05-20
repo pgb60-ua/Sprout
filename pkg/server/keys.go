@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"sprout/pkg/api"
+	"sprout/pkg/roles"
 	"sprout/pkg/utils"
 	"time"
 )
@@ -117,6 +118,7 @@ func (s *server) loginKey(req api.Request) api.Response {
 	if err := s.db.Put("sessions", []byte(pending.Username), data); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar sesion"}
 	}
+	isAdmin, _ := s.roles.HasRole(pending.Username, roles.AdminRole)
 
-	return api.Response{Success: true, Message: "Login completo", Token: token, KeyAuthEnabled: true}
+	return api.Response{Success: true, Message: "Login completo", Token: token, KeyAuthEnabled: true, IsAdmin: isAdmin}
 }

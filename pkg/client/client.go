@@ -34,6 +34,7 @@ type client struct {
 	keyAuthEnabled bool // Para saber si tiene la firma publica - privada enabled y cambiar el texto y opciones
 	httpClient     *http.Client
 	apiEndpoint    string
+	isAdmin        bool
 }
 
 // Run es la única función exportada de este paquete.
@@ -97,9 +98,11 @@ func (c *client) runLoop() {
 				totpOption,
 				keyOption,
 				"Gestión de ficheros",
-				"Cerrar sesión",
-				"Salir",
 			}
+			if c.isAdmin {
+				options = append(options, "Administración")
+			}
+			options = append(options, "Cerrar sesión", "Salir")
 		}
 
 		// Mostramos el menú y obtenemos la elección del usuario.
@@ -132,11 +135,25 @@ func (c *client) runLoop() {
 			case 5:
 				c.fileManagerMenu()
 			case 6:
-				c.logoutUser()
+				if c.isAdmin {
+					c.adminMenu()
+				} else {
+					c.logoutUser()
+				}
 			case 7:
-				// Opción Salir
-				c.log.Println("Saliendo del cliente...")
-				return
+				if c.isAdmin {
+					c.logoutUser()
+				} else {
+					// Opción Salir
+					c.log.Println("Saliendo del cliente...")
+					return
+				}
+			case 8:
+				if c.isAdmin {
+					// Opción Salir
+					c.log.Println("Saliendo del cliente...")
+					return
+				}
 			}
 		}
 
@@ -224,6 +241,7 @@ func (c *client) loginUser() {
 		fmt.Println("Éxito:", totopRes.Success)
 		fmt.Println("Mensaje:", totopRes.Message)
 		if totopRes.Success {
+			c.isAdmin = totopRes.IsAdmin
 			c.currentUser = username
 			c.authToken = totopRes.Token
 			c.totpEnabled = true
@@ -254,6 +272,7 @@ func (c *client) loginUser() {
 		fmt.Println("Mensaje: ", r.Message)
 		if r.Success {
 			c.currentUser = username
+			c.isAdmin = r.IsAdmin
 			c.authToken = r.Token
 			c.keyAuthEnabled = r.KeyAuthEnabled
 		}
@@ -262,6 +281,7 @@ func (c *client) loginUser() {
 
 	// Sin TOTP ni clave publica
 	c.currentUser = username
+	c.isAdmin = res.IsAdmin
 	c.authToken = res.Token
 	c.totpEnabled = res.TOTPEnabled
 	fmt.Println("Sesión iniciada con éxito. Token guardado.")
@@ -300,6 +320,7 @@ func (c *client) fetchData() {
 		c.authToken = ""
 		c.totpEnabled = false
 		c.keyAuthEnabled = false
+		c.isAdmin = false
 	}
 }
 
@@ -333,6 +354,7 @@ func (c *client) updateData() {
 		c.authToken = ""
 		c.totpEnabled = false
 		c.keyAuthEnabled = false
+		c.isAdmin = false
 	}
 }
 
@@ -359,6 +381,7 @@ func (c *client) logoutUser() {
 
 	// Si fue exitoso, limpiamos la sesión local.
 	if res.Success {
+		c.isAdmin = false
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
@@ -371,6 +394,7 @@ func (c *client) logoutUser() {
 		c.authToken = ""
 		c.totpEnabled = false
 		c.keyAuthEnabled = false
+		c.isAdmin = false
 	}
 }
 
@@ -724,6 +748,7 @@ func (c *client) setupKey() {
 		c.authToken = ""
 		c.totpEnabled = false
 		c.keyAuthEnabled = false
+		c.isAdmin = false
 		fmt.Println("Sesión expirada")
 		return
 	}
@@ -792,5 +817,56 @@ func (c *client) manageKey() {
 		c.disableKey()
 	} else {
 		c.setupKey()
+	}
+}
+
+func (c *client) adminMenu() {
+	for {
+		ui.ClearScreen()
+		choice := ui.PrintMenu("Administración", []string{
+			"Listar roles",
+			"Crear rol",
+			"Eliminar rol",
+			"Ver roles de usuario",
+			"Asignar rol a usuario",
+			"Quitar rol a usuario",
+			"Volver",
+		})
+		switch choice {
+		case 1:
+			res := c.sendRequest(api.Request{Action: api.ActionListRoles, Username: c.currentUser, Token: c.authToken})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Roles:", res.Roles)
+		case 2:
+			role := ui.ReadInput("Nombre del nuevo rol")
+			res := c.sendRequest(api.Request{Action: api.ActionCreateRole, Username: c.currentUser, Token: c.authToken, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 3:
+			role := ui.ReadInput("Nombre del rol a eliminar")
+			res := c.sendRequest(api.Request{Action: api.ActionDeleteRole, Username: c.currentUser, Token: c.authToken, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 4:
+			target := ui.ReadInput("Nombre de usuario")
+			res := c.sendRequest(api.Request{Action: api.ActionGetUserRoles, Username: c.currentUser, Token: c.authToken, TargetUser: target})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Roles de", target+":", res.Roles)
+		case 5:
+			target := ui.ReadInput("Nombre de usuario")
+			role := ui.ReadInput("Rol a asignar")
+			res := c.sendRequest(api.Request{Action: api.ActionAssignRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 6:
+			target := ui.ReadInput("Nombre de usuario")
+			role := ui.ReadInput("Rol a quitar")
+			res := c.sendRequest(api.Request{Action: api.ActionRemoveRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 7:
+			return
+		}
+		ui.Pause("Pulsa [Enter] para continuar...")
 	}
 }
