@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"sprout/pkg/api"
@@ -412,6 +413,36 @@ func (c *client) sendRequest(req api.Request) api.Response {
 	return res
 }
 
+func (c *client) maybeOfferDeleteOutOfSyncFile(path string, res api.Response) {
+	if path == "" || res.Success || !isTimestampMismatchMessage(res.Message) {
+		return
+	}
+
+	if !ui.Confirm("El fichero parece haber sido modificado fuera de Sprout. ¿Quieres borrarlo?") {
+		return
+	}
+
+	deleteRes := c.sendRequest(api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		Path:     path,
+	})
+	if !deleteRes.Success {
+		fmt.Println("No se pudo borrar el fichero:", deleteRes.Message)
+		return
+	} else {
+		fmt.Println("Éxito:", deleteRes.Success)
+		fmt.Println("Mensaje:", deleteRes.Message)
+	}
+
+}
+
+func isTimestampMismatchMessage(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "timestamp") || strings.Contains(lower, "modificado fuera")
+}
+
 func newSecureHTTPClient(caFile string) (*http.Client, error) {
 	caPEM, err := os.ReadFile(caFile)
 	if err != nil {
@@ -504,6 +535,7 @@ func (c *client) fileManagerMenu() {
 			})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
+			c.maybeOfferDeleteOutOfSyncFile(path, res)
 		case 5: // Visualizar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a visualizar")
 			res := c.sendRequest(api.Request{
@@ -518,6 +550,8 @@ func (c *client) fileManagerMenu() {
 				fmt.Println("--- Contenido ---")
 				fmt.Println(res.Data)
 				fmt.Println("-----------------")
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
 		case 6: // Crear carpeta
 			path := ui.ReadInput("Introduce la ruta/nombre de la nueva carpeta")
