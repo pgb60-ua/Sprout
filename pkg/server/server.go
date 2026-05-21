@@ -186,6 +186,10 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.deleteDir(req)
 	case api.ActionListFiles:
 		res = s.listFiles(req)
+	case api.ActionGetFileMetadata:
+		res = s.getFileMetadata(req)
+	case api.ActionUpdateFileMetadata:
+		res = s.updateFileMetadata(req)
 	// TOTP
 	case api.ActionTOTPSetup:
 		res = s.tOTPSetup(req)
@@ -543,6 +547,10 @@ func (s *server) createFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
 	}
 
+	if parentPerm := s.requireParentDirWrite(req.Username, dek, req.Path); !parentPerm.Success {
+		return parentPerm
+	}
+
 	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
@@ -554,6 +562,14 @@ func (s *server) createFile(req api.Request) api.Response {
 
 	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: "Fichero creado, pero no se pudo guardar su timestamp"}
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "Fichero creado, pero no se pudieron leer sus metadatos"}
+	}
+	if _, err := s.ensureFileMetadata(req.Username, dek, req.Path, info); err != nil {
+		return api.Response{Success: false, Message: "Fichero creado, pero no se pudieron guardar sus metadatos"}
 	}
 
 	return api.Response{Success: true, Message: "Fichero creado con exito"}
@@ -576,10 +592,20 @@ func (s *server) deleteFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+
+	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+		return perm
+	}
+
 	if err := os.Remove(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar fichero"}
 	}
 	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(req.Username, req.Path))
+	_ = s.deleteFileMetadata(req.Username, dek, req.Path)
 
 	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
@@ -610,6 +636,10 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
+	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+		return perm
+	}
+
 	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
@@ -621,6 +651,19 @@ func (s *server) modifyFile(req api.Request) api.Response {
 
 	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudo actualizar su timestamp"}
+	}
+
+	info, err = os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron leer sus metadatos"}
+	}
+	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	if err != nil {
+		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron recuperar sus metadatos"}
+	}
+	meta.ModifiedAt = time.Now().UTC()
+	if err := s.saveFileMetadata(req.Username, dek, meta); err != nil {
+		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron actualizar sus metadatos"}
 	}
 
 	return api.Response{Success: true, Message: "Fichero modificado con exito"}
@@ -652,9 +695,25 @@ func (s *server) readFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
+	info, err := os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al leer metadatos del fichero"}
+	}
+	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'r'); !perm.Success {
+		return perm
+	}
+
 	plaintext, err := decryptFileData(dek, req.Path, data)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al descifrar el fichero"}
+	}
+
+	info, err = os.Stat(path)
+	if err == nil {
+		if meta, metaErr := s.ensureFileMetadata(req.Username, dek, req.Path, info); metaErr == nil {
+			meta.AccessedAt = time.Now().UTC()
+			_ = s.saveFileMetadata(req.Username, dek, meta)
+		}
 	}
 
 	return api.Response{Success: true, Message: "Fichero leido con exito", Data: string(plaintext)}
@@ -672,8 +731,24 @@ func (s *server) createDir(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+	if parentPerm := s.requireParentDirWrite(req.Username, dek, req.Path); !parentPerm.Success {
+		return parentPerm
+	}
+
 	if err := os.MkdirAll(path, 0755); err != nil {
 		return api.Response{Success: false, Message: "Error al crear el directorio"}
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "Directorio creado, pero no se pudieron leer sus metadatos"}
+	}
+	if _, err := s.ensureFileMetadata(req.Username, dek, req.Path, info); err != nil {
+		return api.Response{Success: false, Message: "Directorio creado, pero no se pudieron guardar sus metadatos"}
 	}
 
 	return api.Response{Success: true, Message: "Directorio creado con exito"}
@@ -696,6 +771,16 @@ func (s *server) deleteDir(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El directorio no existe o no es un directorio"}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+		return perm
+	}
+	_ = s.deleteFileMetadataTree(req.Username, dek, path)
+	_ = s.deleteFileTimestampsTree(req.Username, req.Path)
+
 	if err := os.RemoveAll(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar directorio"}
 	}
@@ -713,28 +798,146 @@ func (s *server) listFiles(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	}
+	dirInfo, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return api.Response{Success: true, Message: "Directorio vacio", Files: []string{}, FileEntries: []api.FileEntry{}}
+		}
+		return api.Response{Success: false, Message: "Error al listar ficheros"}
+	}
+	if !dirInfo.IsDir() {
+		return api.Response{Success: false, Message: "La ruta no es un directorio"}
+	}
+	if perm := s.requireFilePermission(req.Username, dek, req.Path, dirInfo, 'r'); !perm.Success {
+		return perm
+	}
+
 	var files []string
+	var fileEntries []api.FileEntry
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return api.Response{Success: true, Message: "Directorio vacio", Files: []string{}}
+			return api.Response{Success: true, Message: "Directorio vacio", Files: []string{}, FileEntries: []api.FileEntry{}}
 		}
 		return api.Response{Success: false, Message: "Error al listar ficheros"}
 	}
 
+	parentPath := normalizedFilePath(req.Path)
 	for _, entry := range entries {
 		suffix := ""
 		if entry.IsDir() {
 			suffix = "/"
 		}
 		files = append(files, entry.Name()+suffix)
+		childPath := entry.Name()
+		if parentPath != "" {
+			childPath = parentPath + "/" + entry.Name()
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al leer metadatos del listado"}
+		}
+		meta, err := s.ensureFileMetadata(req.Username, dek, childPath, info)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al preparar metadatos del listado"}
+		}
+		fileEntries = append(fileEntries, api.FileEntry{
+			Name:     entry.Name() + suffix,
+			Path:     childPath,
+			Metadata: &meta,
+		})
 	}
 
-	return api.Response{Success: true, Message: "Listado correcto", Files: files}
+	return api.Response{Success: true, Message: "Listado correcto", Files: files, FileEntries: fileEntries}
+}
+
+func (s *server) getFileMetadata(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero o directorio"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "El fichero o directorio no existe"}
+	}
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
+	}
+	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener metadatos"}
+	}
+	return api.Response{Success: true, Message: "Metadatos obtenidos", FileMetadata: &meta}
+}
+
+func (s *server) updateFileMetadata(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero o directorio"}
+	}
+	if !validFilePermissions(req.Data) {
+		return api.Response{Success: false, Message: "Permisos invalidos: usa formato rwx------"}
+	}
+	path, err := s.safePath(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return api.Response{Success: false, Message: "El fichero o directorio no existe"}
+	}
+	dek, ok := s.getSessionKey(req.Username)
+	if !ok {
+		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
+	}
+	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener metadatos"}
+	}
+	meta.Permissions = req.Data
+	meta.ModifiedAt = time.Now().UTC()
+	if err := s.saveFileMetadata(req.Username, dek, meta); err != nil {
+		return api.Response{Success: false, Message: "Error al actualizar metadatos"}
+	}
+	return api.Response{Success: true, Message: "Metadatos actualizados", FileMetadata: &meta}
 }
 
 func fileTimestampKey(username, reqPath string) []byte {
 	return []byte(username + "\x00" + reqPath)
+}
+
+func (s *server) deleteFileTimestampsTree(username, reqPath string) error {
+	rootKey := string(fileTimestampKey(username, reqPath))
+	keys, err := s.db.KeysByPrefix(fileTimestampNamespace, []byte(rootKey))
+	if err != nil {
+		if errors.Is(err, store.ErrNamespaceNotFound) {
+			return nil
+		}
+		return err
+	}
+	for _, key := range keys {
+		keyText := string(key)
+		if keyText != rootKey && !strings.HasPrefix(keyText, rootKey+"/") && !strings.HasPrefix(keyText, rootKey+"\\") {
+			continue
+		}
+		if err := s.db.Delete(fileTimestampNamespace, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *server) storeFileTimestamp(username, reqPath, absPath string, baseDEK []byte) error {

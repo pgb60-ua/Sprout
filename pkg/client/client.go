@@ -504,6 +504,8 @@ func (c *client) fileManagerMenu() {
 			"Visualizar fichero",
 			"Crear carpeta",
 			"Borrar carpeta",
+			"Ver metadatos",
+			"Modificar permisos lógicos",
 			"Volver al menú principal",
 		}
 
@@ -549,6 +551,23 @@ func (c *client) fileManagerMenu() {
 			fmt.Println("Mensaje:", res.Message)
 		case 4: // Modificar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a modificar")
+			metaRes := c.sendRequest(api.Request{
+				Action:   api.ActionGetFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			if !metaRes.Success {
+				fmt.Println("Éxito:", metaRes.Success)
+				fmt.Println("Mensaje:", metaRes.Message)
+				c.maybeOfferDeleteOutOfSyncFile(path, metaRes)
+				break
+			}
+			if metaRes.FileMetadata == nil || !canWriteLogical(*metaRes.FileMetadata) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: permiso denegado para modificar el fichero")
+				break
+			}
 			data := ui.ReadMultiline("Introduce el nuevo contenido del fichero, el contenido actual se sobrescribirá.")
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionModifyFile,
@@ -597,11 +616,68 @@ func (c *client) fileManagerMenu() {
 			})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 8: // Volver al menú principal
+		case 8: // Ver metadatos
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionGetFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 9: // Modificar permisos lógicos
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			permissions := ui.ReadInput("Introduce permisos en formato rwx------")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionUpdateFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     permissions,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 10: // Volver al menú principal
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
 	}
+}
+
+func canWriteLogical(meta api.FileMetadata) bool {
+	return len(meta.Permissions) >= 2 && meta.Permissions[1] == 'w'
+}
+
+func printFileMetadata(meta api.FileMetadata) {
+	itemType := "fichero"
+	if meta.IsDir {
+		itemType = "directorio"
+	}
+	fmt.Println("--- Metadatos ---")
+	fmt.Println("Ruta:", meta.Path)
+	fmt.Println("Nombre:", meta.Name)
+	fmt.Println("Tipo:", itemType)
+	fmt.Println("Tamaño:", meta.Size)
+	fmt.Println("Propietario:", meta.Owner)
+	fmt.Println("Permisos:", meta.Permissions)
+	fmt.Println("Creado:", meta.CreatedAt.Format(time.RFC3339))
+	fmt.Println("Modificado:", meta.ModifiedAt.Format(time.RFC3339))
+	if !meta.AccessedAt.IsZero() {
+		fmt.Println("Accedido:", meta.AccessedAt.Format(time.RFC3339))
+	}
+	fmt.Println("Plataforma:", meta.Platform)
+	fmt.Println("-----------------")
 }
 
 func (c *client) manageTOTP() {

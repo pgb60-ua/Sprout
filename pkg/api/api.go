@@ -2,6 +2,8 @@
 // para la comunicación entre servidor y cliente.
 package api
 
+import "time"
+
 const (
 	ActionRegister   = "register"
 	ActionLogin      = "login"
@@ -30,6 +32,10 @@ const (
 	ActionDeleteDir  = "deleteDir"
 	ActionListFiles  = "listFiles"
 
+	// File metadata management actions
+	ActionGetFileMetadata    = "getFileMetadata"
+	ActionUpdateFileMetadata = "updateFileMetadata"
+
 	// Role management
 	ActionAssignRole   = "assignRole"
 	ActionRemoveRole   = "removeRole"
@@ -55,20 +61,41 @@ type Request struct {
 	TargetUser     string `json:"target_user,omitempty"`
 }
 
+type FileMetadata struct {
+	Path        string    `json:"path"`
+	Name        string    `json:"name"`
+	IsDir       bool      `json:"is_dir"`
+	Size        int64     `json:"size"`
+	Owner       string    `json:"owner"`
+	Permissions string    `json:"permissions"`
+	CreatedAt   time.Time `json:"created_at"`
+	ModifiedAt  time.Time `json:"modified_at"`
+	AccessedAt  time.Time `json:"accessed_at,omitempty"`
+	Platform    string    `json:"platform"`
+}
+
+type FileEntry struct {
+	Name     string        `json:"name"`
+	Path     string        `json:"path"`
+	Metadata *FileMetadata `json:"metadata,omitempty"`
+}
+
 type Response struct {
-	Success        bool     `json:"success"`
-	Message        string   `json:"message"`
-	Token          string   `json:"token,omitempty"`
-	Data           string   `json:"data,omitempty"`
-	SessionExpired bool     `json:"session_expired,omitempty"`
-	Files          []string `json:"files,omitempty"`
-	RequiresTOTP   bool     `json:"requires_totp,omitempty"`
-	TempToken      string   `json:"temp_token,omitempty"`
-	OTPAuthURI     string   `json:"otpauth_uri,omitempty"`
-	TOTPEnabled    bool     `json:"totp_enabled,omitempty"`
-	Challenge      []byte   `json:"challenge,omitempty"`
-	KeyAuthEnabled bool     `json:"key_auth_enabled,omitempty"`
-	RequiresKey    bool     `json:"requires_key,omitempty"`
-	Roles          []string `json:"roles,omitempty"`
-	IsAdmin        bool     `json:"is_admin,omitempty"`
+	Success        bool          `json:"success"`
+	Message        string        `json:"message"`
+	Token          string        `json:"token,omitempty"`
+	Data           string        `json:"data,omitempty"`
+	SessionExpired bool          `json:"session_expired,omitempty"`
+	Files          []string      `json:"files,omitempty"`
+	FileMetadata   *FileMetadata `json:"file_metadata,omitempty"`
+	FileEntries    []FileEntry   `json:"file_entries,omitempty"`
+	RequiresTOTP   bool          `json:"requires_totp,omitempty"`
+	TempToken      string        `json:"temp_token,omitempty"`
+	OTPAuthURI     string        `json:"otpauth_uri,omitempty"`
+	TOTPEnabled    bool          `json:"totp_enabled,omitempty"`
+	Challenge      []byte        `json:"challenge,omitempty"`
+	KeyAuthEnabled bool          `json:"key_auth_enabled,omitempty"`
+	RequiresKey    bool          `json:"requires_key,omitempty"`
+	Roles          []string      `json:"roles,omitempty"`
+	IsAdmin        bool          `json:"is_admin,omitempty"`
 }
