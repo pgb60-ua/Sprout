@@ -530,6 +530,15 @@ func (s *server) safePath(username, reqPath string) (string, error) {
 	return targetPathAbs, nil
 }
 
+func (s *server) removeUserRootIfEmpty(username string) {
+	baseDir := filepath.Join("data", "files", username)
+	entries, err := os.ReadDir(baseDir)
+	if err != nil || len(entries) != 0 {
+		return
+	}
+	_ = os.Remove(baseDir)
+}
+
 func (s *server) createFile(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
 		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
@@ -597,7 +606,7 @@ func (s *server) deleteFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
 	}
 
-	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'w'); !perm.Success {
 		return perm
 	}
 
@@ -606,6 +615,7 @@ func (s *server) deleteFile(req api.Request) api.Response {
 	}
 	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(req.Username, req.Path))
 	_ = s.deleteFileMetadata(req.Username, dek, req.Path)
+	s.removeUserRootIfEmpty(req.Username)
 
 	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
@@ -636,7 +646,7 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
-	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'w'); !perm.Success {
 		return perm
 	}
 
@@ -699,7 +709,7 @@ func (s *server) readFile(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al leer metadatos del fichero"}
 	}
-	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'r'); !perm.Success {
+	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'r'); !perm.Success {
 		return perm
 	}
 
@@ -725,6 +735,9 @@ func (s *server) createDir(req api.Request) api.Response {
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del directorio"}
+	}
+	if normalizedFilePath(req.Path) == "" {
+		return api.Response{Success: false, Message: "No se puede operar sobre la carpeta raiz del usuario"}
 	}
 	path, err := s.safePath(req.Username, req.Path)
 	if err != nil {
@@ -761,6 +774,9 @@ func (s *server) deleteDir(req api.Request) api.Response {
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del directorio"}
 	}
+	if normalizedFilePath(req.Path) == "" {
+		return api.Response{Success: false, Message: "No se puede operar sobre la carpeta raiz del usuario"}
+	}
 	path, err := s.safePath(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
@@ -775,7 +791,7 @@ func (s *server) deleteDir(req api.Request) api.Response {
 	if !ok {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
 	}
-	if perm := s.requireFilePermission(req.Username, dek, req.Path, info, 'w'); !perm.Success {
+	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'w'); !perm.Success {
 		return perm
 	}
 	_ = s.deleteFileMetadataTree(req.Username, dek, path)
@@ -784,6 +800,7 @@ func (s *server) deleteDir(req api.Request) api.Response {
 	if err := os.RemoveAll(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar directorio"}
 	}
+	s.removeUserRootIfEmpty(req.Username)
 
 	return api.Response{Success: true, Message: "Directorio borrado con exito"}
 }
@@ -812,7 +829,7 @@ func (s *server) listFiles(req api.Request) api.Response {
 	if !dirInfo.IsDir() {
 		return api.Response{Success: false, Message: "La ruta no es un directorio"}
 	}
-	if perm := s.requireFilePermission(req.Username, dek, req.Path, dirInfo, 'r'); !perm.Success {
+	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'r'); !perm.Success {
 		return perm
 	}
 
@@ -887,6 +904,9 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	}
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero o directorio"}
+	}
+	if normalizedFilePath(req.Path) == "" {
+		return api.Response{Success: false, Message: "No se puede modificar la carpeta raiz del usuario"}
 	}
 	if !validFilePermissions(req.Data) {
 		return api.Response{Success: false, Message: "Permisos invalidos: usa formato rwx------"}

@@ -101,6 +101,10 @@ func decryptFileMetadata(dek []byte, path string, data []byte) (api.FileMetadata
 }
 
 func (s *server) loadFileMetadata(username string, dek []byte, path string, info os.FileInfo) (api.FileMetadata, error) {
+	if normalizedFilePath(path) == "" {
+		_ = s.deleteRootFileMetadata(username, dek)
+		return rootFileMetadata(username), nil
+	}
 	key, err := fileMetadataKey(dek, username, path)
 	if err != nil {
 		return api.FileMetadata{}, err
@@ -119,6 +123,9 @@ func (s *server) loadFileMetadata(username string, dek []byte, path string, info
 
 func (s *server) saveFileMetadata(username string, dek []byte, meta api.FileMetadata) error {
 	meta.Path = normalizedFilePath(meta.Path)
+	if meta.Path == "" {
+		return nil
+	}
 	key, err := fileMetadataKey(dek, username, meta.Path)
 	if err != nil {
 		return err
@@ -131,6 +138,10 @@ func (s *server) saveFileMetadata(username string, dek []byte, meta api.FileMeta
 }
 
 func (s *server) ensureFileMetadata(username string, dek []byte, path string, info os.FileInfo) (api.FileMetadata, error) {
+	if normalizedFilePath(path) == "" {
+		_ = s.deleteRootFileMetadata(username, dek)
+		return rootFileMetadata(username), nil
+	}
 	meta, err := s.loadFileMetadata(username, dek, path, info)
 	if err == nil {
 		return meta, nil
@@ -159,7 +170,24 @@ func (s *server) ensureFileMetadata(username string, dek []byte, path string, in
 }
 
 func (s *server) deleteFileMetadata(username string, dek []byte, path string) error {
+	if normalizedFilePath(path) == "" {
+		return nil
+	}
 	key, err := fileMetadataKey(dek, username, path)
+	if err != nil {
+		return err
+	}
+	if err := s.db.Delete(fileMetadataNamespace, key); err != nil {
+		if errors.Is(err, store.ErrNamespaceNotFound) || errors.Is(err, store.ErrKeyNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *server) deleteRootFileMetadata(username string, dek []byte) error {
+	key, err := fileMetadataKey(dek, username, "")
 	if err != nil {
 		return err
 	}
@@ -260,6 +288,78 @@ func parentFilePath(path string) string {
 	return parent
 }
 
+func rootFileMetadata(username string) api.FileMetadata {
+	now := time.Now().UTC()
+	return api.FileMetadata{
+		Path:        "",
+		Name:        username,
+		IsDir:       true,
+		Owner:       username,
+		Permissions: "rwx------",
+		CreatedAt:   now,
+		ModifiedAt:  now,
+		Platform:    runtime.GOOS,
+	}
+}
+
+func pathPrefixes(path string) []string {
+	normalized := normalizedFilePath(path)
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Split(normalized, "/")
+	prefixes := make([]string, 0, len(parts))
+	for i := range parts {
+		prefixes = append(prefixes, strings.Join(parts[:i+1], "/"))
+	}
+	return prefixes
+}
+
+func (s *server) loadPermissionTree(username string, dek []byte, path string, includeTarget bool) ([]api.FileMetadata, error) {
+	normalized := normalizedFilePath(path)
+	tree := []api.FileMetadata{rootFileMetadata(username)}
+	prefixes := pathPrefixes(normalized)
+	if !includeTarget && len(prefixes) > 0 {
+		prefixes = prefixes[:len(prefixes)-1]
+	}
+	for _, prefix := range prefixes {
+		absPath, err := s.safePath(username, prefix)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return nil, err
+		}
+		meta, err := s.ensureFileMetadata(username, dek, prefix, info)
+		if err != nil {
+			return nil, err
+		}
+		tree = append(tree, meta)
+	}
+	return tree, nil
+}
+
+func hasPermissionThroughTree(tree []api.FileMetadata, permission byte) bool {
+	for _, meta := range tree {
+		if !hasLogicalPermission(meta, permission) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *server) requirePathPermission(username string, dek []byte, path string, includeTarget bool, permission byte) api.Response {
+	tree, err := s.loadPermissionTree(username, dek, path, includeTarget)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener permisos del arbol"}
+	}
+	if !hasPermissionThroughTree(tree, permission) {
+		return api.Response{Success: false, Message: "Permiso denegado"}
+	}
+	return api.Response{Success: true}
+}
+
 func (s *server) requireFilePermission(username string, dek []byte, path string, info os.FileInfo, permission byte) api.Response {
 	meta, err := s.ensureFileMetadata(username, dek, path, info)
 	if err != nil {
@@ -281,12 +381,6 @@ func (s *server) requireParentDirWrite(username string, dek []byte, childPath st
 	if err != nil || !info.IsDir() {
 		return api.Response{Success: false, Message: "El directorio padre no existe"}
 	}
-	meta, err := s.ensureFileMetadata(username, dek, parentPath, info)
-	if err != nil {
-		return api.Response{Success: false, Message: "Error al obtener metadatos del directorio padre"}
-	}
-	if !hasLogicalPermission(meta, 'w') || !hasLogicalPermission(meta, 'x') {
-		return api.Response{Success: false, Message: "Permiso denegado"}
-	}
-	return api.Response{Success: true, FileMetadata: &meta}
+	_ = info
+	return s.requirePathPermission(username, dek, parentPath, true, 'w')
 }

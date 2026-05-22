@@ -509,6 +509,231 @@ func TestServer_FileLogicalPermissionsControlDirectoryOperations(t *testing.T) {
 	}
 }
 
+func TestServer_FileLogicalPermissionsUseAncestorTree(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, dir := range []string{"c1", "c1/c2", "c1/c2/c3"} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:   api.ActionCreateDir,
+			Username: "alice",
+			Token:    token,
+			Path:     dir,
+		})
+		if !r.Success {
+			t.Fatalf("createDir(%s) fallo: %s", dir, r.Message)
+		}
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2",
+		Data:     "r--------",
+	})
+	if !r.Success {
+		t.Fatalf("update c2 fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+		Data:     "---------",
+	})
+	if !r.Success {
+		t.Fatalf("update c3 fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2",
+	})
+	if !r.Success {
+		t.Fatalf("c1/c2 deberia permitir leer por permisos efectivos: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/nota.txt",
+		Data:     "contenido",
+	})
+	if r.Success {
+		t.Fatal("c1/c2 no deberia permitir crear sin permiso w efectivo")
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+	})
+	if r.Success {
+		t.Fatal("c1/c2/c3 no deberia permitir leer por c3 sin permisos")
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("c1 deberia seguir permitiendo crear fuera de c2: %s", r.Message)
+	}
+}
+
+func TestServer_FileLogicalPermissionsAncestorRestrictsDescendants(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, dir := range []string{"c1", "c1/c2", "c1/c2/c3"} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:   api.ActionCreateDir,
+			Username: "alice",
+			Token:    token,
+			Path:     dir,
+		})
+		if !r.Success {
+			t.Fatalf("createDir(%s) fallo: %s", dir, r.Message)
+		}
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1",
+		Data:     "r--------",
+	})
+	if !r.Success {
+		t.Fatalf("update c1 fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+	})
+	if !r.Success {
+		t.Fatalf("c1/c2/c3 deberia permitir leer porque todos tienen r efectivo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3/nota.txt",
+		Data:     "contenido",
+	})
+	if r.Success {
+		t.Fatal("c1/c2/c3 no deberia permitir crear porque c1 no tiene w")
+	}
+}
+
+func TestServer_RootDirectoryRestrictionsAndEmptyCleanup(t *testing.T) {
+	ts, dir, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, req := range []api.Request{
+		{Action: api.ActionCreateDir, Path: "."},
+		{Action: api.ActionDeleteDir, Path: "."},
+		{Action: api.ActionUpdateFileMetadata, Path: ".", Data: "rwx------"},
+	} {
+		req.Username = "alice"
+		req.Token = token
+		_, r = postJSON(t, httpClient, apiURL, req)
+		if r.Success {
+			t.Fatalf("%s sobre raiz deberia fallar", req.Action)
+		}
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success {
+		t.Fatalf("deleteFile fallo: %s", r.Message)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "data", "files", "alice")); !os.IsNotExist(err) {
+		t.Fatalf("la raiz vacia del usuario deberia borrarse, stat err=%v", err)
+	}
+}
+
 func TestServer_FileMetadataDirectoryLifecycle(t *testing.T) {
 	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"
