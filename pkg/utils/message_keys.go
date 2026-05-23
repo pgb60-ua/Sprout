@@ -17,7 +17,10 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
-const messageKeyFileVersion = 1
+const (
+	messageKeyFileVersion = 1
+	messageKeySaltLen     = 16
+)
 
 type messageKeyFile struct {
 	Version   int    `json:"version"`
@@ -63,7 +66,7 @@ func EncryptMessagePrivateKey(privateKey []byte, password, username string) erro
 		return fmt.Errorf("clave privada de mensajes invalida")
 	}
 
-	salt := make([]byte, 16)
+	salt := make([]byte, messageKeySaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return fmt.Errorf("error generando salt: %w", err)
 	}
@@ -123,6 +126,9 @@ func DecryptMessagePrivateKey(password, username string) ([]byte, error) {
 	}
 	if kf.KDF != "argon2id" || kf.Cipher != "aes-256-gcm" {
 		return nil, fmt.Errorf("algoritmo de clave de mensajes no soportado: %s/%s", kf.KDF, kf.Cipher)
+	}
+	if len(kf.Salt) != messageKeySaltLen {
+		return nil, fmt.Errorf("salt de clave de mensajes invalida")
 	}
 
 	key := argon2.IDKey([]byte(password), kf.Salt, 1, 64*1024, 4, 32)

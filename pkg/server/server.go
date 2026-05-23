@@ -214,28 +214,40 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al serializar cifrado del usuario"}
 	}
 
-	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
-		return api.Response{Success: false, Message: "Error al guardar credenciales"}
-	}
-
-	if err := s.db.Put(cryptoNamespace, []byte(req.Username), cryptoMetaBytes); err != nil {
-		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
-	}
-
 	encryptedUserdata, err := encryptUserdata(dek, []byte(""))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar datos iniciales del usuario"}
 	}
 
+	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar credenciales"}
+	}
+
+	if err := s.db.Put(cryptoNamespace, []byte(req.Username), cryptoMetaBytes); err != nil {
+		s.rollbackUserRegistration(req.Username, "auth")
+		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
+	}
+
 	if err := s.db.Put("userdata", []byte(req.Username), encryptedUserdata); err != nil {
+		s.rollbackUserRegistration(req.Username, cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
 	if err := s.db.Put(publicKeysNamespace, []byte(req.Username), []byte(req.PublicKey)); err != nil {
+		s.rollbackUserRegistration(req.Username, "userdata", cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
+}
+
+func (s *server) rollbackUserRegistration(username string, namespaces ...string) {
+	key := []byte(username)
+	for _, namespace := range namespaces {
+		if err := s.db.Delete(namespace, key); err != nil && s.log != nil {
+			s.log.Printf("No se pudo revertir registro parcial de %q en %q: %v", username, namespace, err)
+		}
+	}
 }
 
 // loginUser valida credenciales y desbloquea la clave en memoria.

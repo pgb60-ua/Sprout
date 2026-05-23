@@ -352,6 +352,7 @@ func (c *client) logoutUser() {
 func (c *client) unlockMessageKey(password, username string) {
 	key, err := utils.DecryptMessagePrivateKey(password, username)
 	if err != nil {
+		clearBytes(c.messageKey)
 		c.messageKey = nil
 		fmt.Println("Aviso: no se pudo desbloquear la clave privada de mensajes:", err)
 		return

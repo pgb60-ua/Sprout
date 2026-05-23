@@ -130,17 +130,29 @@ func (s *server) listIndexedMessages(req api.Request, namespace string, inbox bo
 	for _, key := range keys {
 		messageID, err := s.db.Get(namespace, key)
 		if err != nil {
-			continue
+			if s.log != nil {
+				s.log.Printf("No se pudo leer indice de mensajes %q/%q: %v", namespace, string(key), err)
+			}
+			return api.Response{Success: false, Message: "Error al listar mensajes"}
 		}
 		msg, err := s.loadMessage(string(messageID))
 		if err != nil {
-			continue
+			if s.log != nil {
+				s.log.Printf("No se pudo cargar mensaje indexado %q desde %q/%q: %v", string(messageID), namespace, string(key), err)
+			}
+			return api.Response{Success: false, Message: "Error al listar mensajes"}
 		}
 		if inbox && msg.Recipient != req.Username {
-			continue
+			if s.log != nil {
+				s.log.Printf("Indice de mensajes inconsistente %q/%q: mensaje %q pertenece a destinatario %q, no a %q", namespace, string(key), msg.ID, msg.Recipient, req.Username)
+			}
+			return api.Response{Success: false, Message: "Error al listar mensajes"}
 		}
 		if !inbox && msg.Sender != req.Username {
-			continue
+			if s.log != nil {
+				s.log.Printf("Indice de mensajes inconsistente %q/%q: mensaje %q pertenece a remitente %q, no a %q", namespace, string(key), msg.ID, msg.Sender, req.Username)
+			}
+			return api.Response{Success: false, Message: "Error al listar mensajes"}
 		}
 		messages = append(messages, api.MessageSummary{
 			ID:        msg.ID,
