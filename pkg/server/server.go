@@ -4,6 +4,7 @@ package server
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,12 +14,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"sprout/pkg/api"
 	"sprout/pkg/netcfg"
+	"sprout/pkg/roles"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -31,6 +34,8 @@ type server struct {
 	loginAttempts map[string]*loginAttempt
 	pendingTOTP   map[string]pendingTOTPLogin // No le pongo el * porque no lo modifico una vez añadido
 	sessionKeys   map[string][]byte
+	pendingKey    map[string]pendingKeyLogin
+	roles         *roles.RoleStore
 }
 
 type session struct {
@@ -41,6 +46,7 @@ type session struct {
 const sessionDuration = 24 * time.Hour
 const lengthToken = 16
 const temporalTokenDuration = 2 * time.Minute
+const fileTimestampNamespace = "file_timestamps"
 
 // Run inicia la base de datos y arranca el servidor HTTPS.
 func Run() error {
@@ -57,6 +63,41 @@ func Run() error {
 		return fmt.Errorf("error abriendo base de datos: %v", err)
 	}
 
+	// Creamos RoleStore y los roles por defecto
+	rs := roles.NewRoleStore(db)
+
+	for _, name := range []string{roles.AdminRole, roles.DefaultRole} {
+		exists, err := rs.RoleExists(name)
+		if err != nil {
+			return fmt.Errorf("error comprobando rol %q: %w", name, err)
+		}
+		if !exists {
+			if err := rs.CreateRole(name); err != nil {
+				return fmt.Errorf("error creando rol %q: %w", name, err)
+			}
+		}
+	}
+
+	if cfg.AdminUser != "" {
+		_, err := db.Get("auth", []byte(cfg.AdminUser))
+		if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
+			log.Printf("[srv] SPROUT_ADMIN=%q pero el usuario no existe aún en la DB", cfg.AdminUser)
+		} else if err != nil {
+			log.Printf("[srv] error comprobando usuario admin %q: %v", cfg.AdminUser, err)
+		} else {
+			ok, err := rs.HasRole(cfg.AdminUser, roles.AdminRole)
+			if err != nil {
+				log.Printf("[srv] error comprobando rol admin de %q: %v", cfg.AdminUser, err)
+			} else if !ok {
+				if err := rs.AssignRole(cfg.AdminUser, roles.AdminRole); err != nil {
+					log.Printf("[srv] no se pudo asignar rol admin a %q: %v", cfg.AdminUser, err)
+				} else {
+					log.Printf("[srv] rol admin asignado a %q", cfg.AdminUser)
+				}
+			}
+		}
+	}
+
 	// Creamos nuestro servidor con su logger con prefijo 'srv'
 	srv := &server{
 		db:            db,
@@ -64,6 +105,8 @@ func Run() error {
 		loginAttempts: make(map[string]*loginAttempt),
 		pendingTOTP:   make(map[string]pendingTOTPLogin),
 		sessionKeys:   make(map[string][]byte),
+		pendingKey:    make(map[string]pendingKeyLogin),
+		roles:         rs,
 	}
 
 	// Al terminar, cerramos la base de datos
@@ -163,6 +206,29 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.tOTPConfirm(req)
 	case api.ActionTOTPDisable:
 		res = s.totpDisable(req)
+	// Public private key
+	case api.ActionKeySetup:
+		res = s.keySetup(req)
+	case api.ActionKeyDisable:
+		res = s.keyDisable(req)
+	case api.ActionLoginKey:
+		res = s.loginKey(req)
+	case api.ActionVerifyPassword:
+		res = s.verifyPassword(req)
+	// Roles management
+	case api.ActionAssignRole:
+		res = s.assignRole(req)
+	case api.ActionRemoveRole:
+		res = s.removeRole(req)
+	case api.ActionListRoles:
+		res = s.listRoles(req)
+	case api.ActionGetUserRoles:
+		res = s.getUserRoles(req)
+	case api.ActionCreateRole:
+		res = s.createRole(req)
+	case api.ActionDeleteRole:
+		res = s.deleteRole(req)
+
 	default:
 		res = api.Response{Success: false, Message: "Accion desconocida"}
 	}
@@ -184,10 +250,10 @@ func (s *server) registerUser(req api.Request) api.Response {
 	if err := utils.ValidatePassword(req.Password); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
-	if req.PublicKey == "" {
+	if req.MessagePublicKey == "" {
 		return api.Response{Success: false, Message: "Falta clave publica de mensajes"}
 	}
-	if _, err := utils.DecodeMessagePublicKey(req.PublicKey); err != nil {
+	if _, err := utils.DecodeMessagePublicKey(req.MessagePublicKey); err != nil {
 		return api.Response{Success: false, Message: "Clave publica de mensajes invalida"}
 	}
 
@@ -233,9 +299,14 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
-	if err := s.db.Put(publicKeysNamespace, []byte(req.Username), []byte(req.PublicKey)); err != nil {
+	if err := s.db.Put(publicKeysNamespace, []byte(req.Username), []byte(req.MessagePublicKey)); err != nil {
 		s.rollbackUserRegistration(req.Username, "userdata", cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
+	}
+
+	if err := s.roles.AssignRole(req.Username, roles.DefaultRole); err != nil {
+		s.rollbackUserRegistration(req.Username, publicKeysNamespace, "userdata", cryptoNamespace, "auth")
+		return api.Response{Success: false, Message: "Error al asignar rol por defecto"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
@@ -311,7 +382,29 @@ func (s *server) loginUser(req api.Request) api.Response {
 		}
 	}
 
-	//Sin TOTP - creo la sesion
+	// Compruebo si tiene public private key
+	kd, err := s.getKeyAuthData(req.Username)
+	if err == nil && kd.Enabled {
+		challenge, err := utils.NewRandomToken(32)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar challenge"}
+		}
+		tempToken, err := utils.NewRandomToken(lengthToken)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al generar token temporal"}
+		}
+		s.mu.Lock()
+		s.pendingKey[tempToken] = pendingKeyLogin{
+			Username:  req.Username,
+			Challenge: []byte(challenge),
+			ExpiresAt: time.Now().Add(temporalTokenDuration),
+		}
+		s.mu.Unlock()
+		s.storeSessionKey(req.Username, dek)
+		return api.Response{Success: true, RequiresKey: true, TempToken: tempToken, Challenge: []byte(challenge)}
+	}
+
+	//Sin TOTP ni clave publica - creo la sesion
 	// Generamos un nuevo token, lo guardamos en 'sessions'
 	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
@@ -333,8 +426,9 @@ func (s *server) loginUser(req api.Request) api.Response {
 	}
 
 	s.storeSessionKey(req.Username, dek)
+	isAdmin, _ := s.roles.HasRole(req.Username, roles.AdminRole)
 
-	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false}
+	return api.Response{Success: true, Message: "Login exitoso", Token: token, TOTPEnabled: false, IsAdmin: isAdmin}
 }
 
 // fetchData verifica el token y retorna el contenido descifrado.
@@ -492,6 +586,10 @@ func (s *server) createFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al crear el fichero"}
 	}
 
+	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: "Fichero creado, pero no se pudo guardar su timestamp"}
+	}
+
 	return api.Response{Success: true, Message: "Fichero creado con exito"}
 }
 
@@ -515,6 +613,7 @@ func (s *server) deleteFile(req api.Request) api.Response {
 	if err := os.Remove(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar fichero"}
 	}
+	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(req.Username, req.Path))
 
 	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
@@ -541,6 +640,10 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
 	}
 
+	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+
 	encrypted, err := encryptFileData(dek, req.Path, []byte(req.Data))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar el fichero"}
@@ -548,6 +651,10 @@ func (s *server) modifyFile(req api.Request) api.Response {
 
 	if err := os.WriteFile(path, encrypted, 0644); err != nil {
 		return api.Response{Success: false, Message: "Error al modificar el fichero"}
+	}
+
+	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudo actualizar su timestamp"}
 	}
 
 	return api.Response{Success: true, Message: "Fichero modificado con exito"}
@@ -573,6 +680,10 @@ func (s *server) readFile(req api.Request) api.Response {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al leer el fichero"}
+	}
+
+	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
 	}
 
 	plaintext, err := decryptFileData(dek, req.Path, data)
@@ -656,6 +767,89 @@ func (s *server) listFiles(req api.Request) api.Response {
 	return api.Response{Success: true, Message: "Listado correcto", Files: files}
 }
 
+func fileTimestampKey(username, reqPath string) []byte {
+	return []byte(username + "\x00" + reqPath)
+}
+
+func (s *server) storeFileTimestamp(username, reqPath, absPath string, baseDEK []byte) error {
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("no se pudo leer el timestamp del fichero: %w", err)
+	}
+
+	timestampRaw := []byte(strconv.FormatInt(info.ModTime().UnixNano(), 10))
+	timestampKey, err := deriveSubkey(baseDEK, "timestamp:"+reqPath, dekLen)
+	if err != nil {
+		return fmt.Errorf("no se pudo derivar clave para timestamp: %w", err)
+	}
+
+	ciphertext, nonce, err := encryptWithGCM(timestampKey, timestampRaw)
+	if err != nil {
+		return fmt.Errorf("no se pudo cifrar el timestamp del fichero: %w", err)
+	}
+
+	blobBytes, err := json.Marshal(gcmBlob{
+		Version:    cryptoVersion,
+		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
+		Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
+	})
+	if err != nil {
+		return fmt.Errorf("no se pudo serializar el timestamp cifrado: %w", err)
+	}
+
+	return s.db.Put(fileTimestampNamespace, fileTimestampKey(username, reqPath), blobBytes)
+}
+
+func (s *server) checkFileTimestamp(username, reqPath, absPath string, baseDEK []byte) error {
+	stored, err := s.db.Get(fileTimestampNamespace, fileTimestampKey(username, reqPath))
+	if err != nil {
+		return fmt.Errorf("el timestamp del fichero no coincide o no existe en la base de datos: %w", err)
+	}
+
+	timestampKey, err := deriveSubkey(baseDEK, "timestamp:"+reqPath, dekLen)
+	if err != nil {
+		return fmt.Errorf("no se pudo derivar clave para validar timestamp: %w", err)
+	}
+
+	var blob gcmBlob
+	if err := json.Unmarshal(stored, &blob); err != nil {
+		return fmt.Errorf("el timestamp almacenado del fichero no es valido: %w", err)
+	}
+	if blob.Version != cryptoVersion {
+		return fmt.Errorf("version de timestamp cifrado no soportada: %d", blob.Version)
+	}
+
+	nonce, err := base64.RawStdEncoding.DecodeString(blob.Nonce)
+	if err != nil {
+		return fmt.Errorf("nonce de timestamp invalido: %w", err)
+	}
+	ciphertext, err := base64.RawStdEncoding.DecodeString(blob.Ciphertext)
+	if err != nil {
+		return fmt.Errorf("ciphertext de timestamp invalido: %w", err)
+	}
+
+	timestampRaw, err := decryptWithGCM(timestampKey, nonce, ciphertext)
+	if err != nil {
+		return fmt.Errorf("no se pudo descifrar el timestamp almacenado del fichero: %w", err)
+	}
+
+	storedUnixNano, err := strconv.ParseInt(string(timestampRaw), 10, 64)
+	if err != nil {
+		return fmt.Errorf("el timestamp almacenado del fichero es invalido: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("no se pudo leer el timestamp actual del fichero: %w", err)
+	}
+
+	if info.ModTime().UnixNano() != storedUnixNano {
+		return fmt.Errorf("el fichero ha sido modificado fuera de Sprout")
+	}
+
+	return nil
+}
+
 func (s *server) storeSessionKey(username string, dek []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -693,4 +887,26 @@ func (s *server) clearSessionKey(username string) {
 		}
 		delete(s.sessionKeys, username)
 	}
+}
+
+func (s *server) verifyPassword(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+
+	data, err := s.db.Get("auth", []byte(req.Username))
+	if err != nil {
+		if errors.Is(err, store.ErrKeyNotFound) {
+			return api.Response{Success: false, Message: "Contraseña incorrecta"}
+		}
+		s.log.Printf("error obteniendo credenciales de %q: %v", req.Username, err)
+		return api.Response{Success: false, Message: "Error verificando contraseña"}
+	}
+
+	ok, err := utils.VerifyPassword(req.Password, string(data))
+	if err != nil || !ok {
+		return api.Response{Success: false, Message: "Contraseña incorrecta"}
+	}
+
+	return api.Response{Success: true, Message: "Contraseña correcta"}
 }

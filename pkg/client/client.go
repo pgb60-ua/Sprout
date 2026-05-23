@@ -4,6 +4,7 @@ package client
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"sprout/pkg/api"
@@ -25,13 +27,15 @@ import (
 // client estructura interna no exportada que controla
 // el estado de la sesión (usuario, token) y logger.
 type client struct {
-	log         *log.Logger
-	currentUser string
-	authToken   string
-	totpEnabled bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
-	messageKey  []byte
-	httpClient  *http.Client
-	apiEndpoint string
+	log            *log.Logger
+	currentUser    string
+	authToken      string
+	totpEnabled    bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
+	keyAuthEnabled bool // Para saber si tiene la firma publica - privada enabled y cambiar el texto y opciones
+	messageKey     []byte
+	httpClient     *http.Client
+	apiEndpoint    string
+	isAdmin        bool
 }
 
 // Run es la única función exportada de este paquete.
@@ -83,6 +87,10 @@ func (c *client) runLoop() {
 			if c.totpEnabled {
 				totpOption = "Gestionar TOTP"
 			}
+			keyOption := "Activar clave publica"
+			if c.keyAuthEnabled {
+				keyOption = "Desactivar clave publica"
+			}
 
 			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
 			options = []string{
@@ -90,10 +98,13 @@ func (c *client) runLoop() {
 				"Actualizar datos",
 				totpOption,
 				"Mensajes",
+				keyOption,
 				"Gestión de ficheros",
-				"Cerrar sesión",
-				"Salir",
 			}
+			if c.isAdmin {
+				options = append(options, "Administración")
+			}
+			options = append(options, "Cerrar sesión", "Salir")
 		}
 
 		// Mostramos el menú y obtenemos la elección del usuario.
@@ -124,13 +135,29 @@ func (c *client) runLoop() {
 			case 4:
 				c.messageMenu()
 			case 5:
-				c.fileManagerMenu()
+				c.manageKey()
 			case 6:
-				c.logoutUser()
+				c.fileManagerMenu()
 			case 7:
-				// Opción Salir
-				c.log.Println("Saliendo del cliente...")
-				return
+				if c.isAdmin {
+					c.adminMenu()
+				} else {
+					c.logoutUser()
+				}
+			case 8:
+				if c.isAdmin {
+					c.logoutUser()
+				} else {
+					// Opción Salir
+					c.log.Println("Saliendo del cliente...")
+					return
+				}
+			case 9:
+				if c.isAdmin {
+					// Opción Salir
+					c.log.Println("Saliendo del cliente...")
+					return
+				}
 			}
 		}
 
@@ -166,10 +193,10 @@ func (c *client) registerUser() {
 
 	// Enviamos la acción al servidor
 	res := c.sendRequest(api.Request{
-		Action:    api.ActionRegister,
-		Username:  username,
-		Password:  password,
-		PublicKey: encodedPublicKey,
+		Action:           api.ActionRegister,
+		Username:         username,
+		Password:         password,
+		MessagePublicKey: encodedPublicKey,
 	})
 
 	// Mostramos resultado
@@ -192,6 +219,9 @@ func (c *client) registerUser() {
 		if loginRes.Success {
 			c.currentUser = username
 			c.authToken = loginRes.Token
+			c.isAdmin = loginRes.IsAdmin
+			c.totpEnabled = loginRes.TOTPEnabled
+			c.keyAuthEnabled = loginRes.KeyAuthEnabled
 			c.messageKey = copyBytes(privateKey)
 			fmt.Println("Login automático exitoso. Token guardado.")
 		} else {
@@ -219,10 +249,8 @@ func (c *client) loginUser() {
 		Password: password,
 	})
 
-	fmt.Println("Éxito:", res.Success)
-	fmt.Println("Mensaje:", res.Message)
-
 	if !res.Success {
+		fmt.Println("Error de inicio de sesión: ", res.Message)
 		return
 	}
 
@@ -237,18 +265,53 @@ func (c *client) loginUser() {
 		fmt.Println("Éxito:", totopRes.Success)
 		fmt.Println("Mensaje:", totopRes.Message)
 		if totopRes.Success {
+			c.isAdmin = totopRes.IsAdmin
 			c.currentUser = username
 			c.authToken = totopRes.Token
 			c.totpEnabled = true
+			c.keyAuthEnabled = totopRes.KeyAuthEnabled
 			c.unlockMessageKey(password, username)
 		}
 		return
 	}
 
-	// Sin TOTP
+	// Si tiene clave publica
+	if res.RequiresKey {
+
+		// Descifro la clave privada del disco
+		priv, err := utils.DecryptPrivateKey(password, username)
+		if err != nil {
+			fmt.Println("Error al descifrar la clave privada:", err)
+			return
+		}
+
+		// Firmo el challenge
+		signature := ed25519.Sign(priv, res.Challenge)
+
+		// Envio la firma al servidor
+		r := c.sendRequest(api.Request{
+			Action:    api.ActionLoginKey,
+			TempToken: res.TempToken,
+			Signature: signature,
+		})
+		fmt.Println("Éxito: ", r.Success)
+		fmt.Println("Mensaje: ", r.Message)
+		if r.Success {
+			c.currentUser = username
+			c.isAdmin = r.IsAdmin
+			c.authToken = r.Token
+			c.keyAuthEnabled = r.KeyAuthEnabled
+			c.unlockMessageKey(password, username)
+		}
+		return
+	}
+
+	// Sin TOTP ni clave publica
 	c.currentUser = username
+	c.isAdmin = res.IsAdmin
 	c.authToken = res.Token
 	c.totpEnabled = res.TOTPEnabled
+	c.keyAuthEnabled = res.KeyAuthEnabled
 	c.unlockMessageKey(password, username)
 	fmt.Println("Sesión iniciada con éxito. Token guardado.")
 }
@@ -338,9 +401,11 @@ func (c *client) logoutUser() {
 	// Si fue exitoso, limpiamos la sesión local.
 	if res.Success {
 		clearBytes(c.messageKey)
+		c.isAdmin = false
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
+		c.keyAuthEnabled = false
 		c.messageKey = nil
 	}
 
@@ -370,6 +435,8 @@ func (c *client) handleSessionExpired(res api.Response) {
 	c.currentUser = ""
 	c.authToken = ""
 	c.totpEnabled = false
+	c.keyAuthEnabled = false
+	c.isAdmin = false
 	c.messageKey = nil
 }
 
@@ -425,6 +492,36 @@ func (c *client) sendRequest(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Respuesta inválida del servidor"}
 	}
 	return res
+}
+
+func (c *client) maybeOfferDeleteOutOfSyncFile(path string, res api.Response) {
+	if path == "" || res.Success || !isTimestampMismatchMessage(res.Message) {
+		return
+	}
+
+	if !ui.Confirm("El fichero parece haber sido modificado fuera de Sprout. ¿Quieres borrarlo?") {
+		return
+	}
+
+	deleteRes := c.sendRequest(api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		Path:     path,
+	})
+	if !deleteRes.Success {
+		fmt.Println("No se pudo borrar el fichero:", deleteRes.Message)
+		return
+	} else {
+		fmt.Println("Éxito:", deleteRes.Success)
+		fmt.Println("Mensaje:", deleteRes.Message)
+	}
+
+}
+
+func isTimestampMismatchMessage(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "timestamp") || strings.Contains(lower, "modificado fuera")
 }
 
 func newSecureHTTPClient(caFile string) (*http.Client, error) {
@@ -519,6 +616,7 @@ func (c *client) fileManagerMenu() {
 			})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
+			c.maybeOfferDeleteOutOfSyncFile(path, res)
 		case 5: // Visualizar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a visualizar")
 			res := c.sendRequest(api.Request{
@@ -533,6 +631,8 @@ func (c *client) fileManagerMenu() {
 				fmt.Println("--- Contenido ---")
 				fmt.Println(res.Data)
 				fmt.Println("-----------------")
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
 		case 6: // Crear carpeta
 			path := ui.ReadInput("Introduce la ruta/nombre de la nueva carpeta")
@@ -672,5 +772,158 @@ func (c *client) disableTOTP() {
 	if res.Success {
 		c.totpEnabled = false
 		fmt.Println("TOTP desactivado correctamente")
+	}
+}
+
+func (c *client) setupKey() {
+
+	// Pido contraseña y la verifico porque luego se usará para cifrar
+	password, err := ui.ReadPassword("Introduce tu contraseña de acceso")
+	if err != nil {
+		fmt.Println("Error leyendo la contraseña")
+		return
+	}
+	confirm, err := ui.ReadPassword("Confirma tu contraseña")
+	if err != nil {
+		fmt.Println("Error leyendo la contraseña")
+		return
+	}
+	if password != confirm {
+		fmt.Println("Las contraseñas no coinciden")
+		return
+	}
+
+	// Verifico contra el servidor
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: c.currentUser,
+		Token:    c.authToken,
+		Password: password,
+	})
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		c.isAdmin = false
+		fmt.Println("Sesión expirada")
+		return
+	}
+	if !res.Success {
+		fmt.Println("Contraseña incorrecta")
+		return
+	}
+
+	// Genero par de claves
+	pub, priv, err := utils.GenerateKeyPair()
+	if err != nil {
+		fmt.Println("Error al generar el par de claves: ", err)
+		return
+	}
+
+	// Envio la clave publica al servidor
+	res = c.sendRequest(api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  c.currentUser,
+		Token:     c.authToken,
+		PublicKey: pub,
+	})
+	fmt.Println("Éxito: ", res.Success)
+	fmt.Println("Mensaje: ", res.Message)
+	if res.SessionExpired {
+		c.currentUser = ""
+		c.authToken = ""
+		c.totpEnabled = false
+		c.keyAuthEnabled = false
+		fmt.Println("Sesión expirada")
+		return
+	}
+	if !res.Success {
+		return
+	}
+
+	// Cifro y guardo clave privada en disco
+	if err := utils.EncryptPrivateKey(priv, password, c.currentUser); err != nil {
+		fmt.Println("Error al guardar la clave privada: ", err)
+		return
+	}
+
+	c.keyAuthEnabled = true
+}
+
+func (c *client) disableKey() {
+	res := c.sendRequest(api.Request{
+		Action:   api.ActionKeyDisable,
+		Username: c.currentUser,
+		Token:    c.authToken,
+	})
+	fmt.Println("Éxito: ", res.Success)
+	fmt.Println("Mensaje: ", res.Message)
+	if res.Success {
+		if err := os.Remove(utils.KeyPath(c.currentUser)); err != nil && !os.IsNotExist(err) {
+			fmt.Println("Error al eliminar la clave privada local:", err)
+			return
+		}
+		c.keyAuthEnabled = false
+	}
+
+}
+
+func (c *client) manageKey() {
+	if c.keyAuthEnabled {
+		c.disableKey()
+	} else {
+		c.setupKey()
+	}
+}
+
+func (c *client) adminMenu() {
+	for {
+		ui.ClearScreen()
+		choice := ui.PrintMenu("Administración", []string{
+			"Listar roles",
+			"Crear rol",
+			"Eliminar rol",
+			"Ver roles de usuario",
+			"Asignar rol a usuario",
+			"Quitar rol a usuario",
+			"Volver",
+		})
+		switch choice {
+		case 1:
+			res := c.sendRequest(api.Request{Action: api.ActionListRoles, Username: c.currentUser, Token: c.authToken})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Roles:", res.Roles)
+		case 2:
+			role := ui.ReadInput("Nombre del nuevo rol")
+			res := c.sendRequest(api.Request{Action: api.ActionCreateRole, Username: c.currentUser, Token: c.authToken, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 3:
+			role := ui.ReadInput("Nombre del rol a eliminar")
+			res := c.sendRequest(api.Request{Action: api.ActionDeleteRole, Username: c.currentUser, Token: c.authToken, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 4:
+			target := ui.ReadInput("Nombre de usuario")
+			res := c.sendRequest(api.Request{Action: api.ActionGetUserRoles, Username: c.currentUser, Token: c.authToken, TargetUser: target})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Roles de", target+":", res.Roles)
+		case 5:
+			target := ui.ReadInput("Nombre de usuario")
+			role := ui.ReadInput("Rol a asignar")
+			res := c.sendRequest(api.Request{Action: api.ActionAssignRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 6:
+			target := ui.ReadInput("Nombre de usuario")
+			role := ui.ReadInput("Rol a quitar")
+			res := c.sendRequest(api.Request{Action: api.ActionRemoveRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+		case 7:
+			return
+		}
+		ui.Pause("Pulsa [Enter] para continuar...")
 	}
 }

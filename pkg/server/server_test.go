@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/roles"
 	"sprout/pkg/store"
 	"sprout/pkg/utils"
 )
@@ -34,10 +36,28 @@ func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 		t.Fatalf("no se ha podido cambiar al directorio temporal: %v", err)
 	}
 
+	rs := roles.NewRoleStore(db)
+
+	// Crear roles por defecto
+	for _, name := range []string{roles.AdminRole, roles.DefaultRole} {
+		exists, err := rs.RoleExists(name)
+		if err != nil {
+			t.Fatalf("no se ha podido comprobar si el rol %q existe: %v", name, err)
+		}
+		if !exists {
+			if err := rs.CreateRole(name); err != nil {
+				t.Fatalf("no se ha podido crear el rol %q: %v", name, err)
+			}
+		}
+	}
+
 	srv := &server{
 		db:            db,
 		loginAttempts: make(map[string]*loginAttempt),
 		sessionKeys:   make(map[string][]byte),
+		pendingTOTP:   make(map[string]pendingTOTPLogin),
+		pendingKey:    make(map[string]pendingKeyLogin),
+		roles:         rs,
 	}
 
 	t.Cleanup(func() { _ = db.Close() })
@@ -91,10 +111,10 @@ func TestServer_RegisterLoginUpdateFetchLogout(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r1 := postJSON(t, httpClient, apiURL, api.Request{
-		Action:    api.ActionRegister,
-		Username:  "alice",
-		Password:  "password123",
-		PublicKey: newTestPublicKey(t),
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r1.Success {
 		t.Fatalf("register fallo: %s", r1.Message)
@@ -190,10 +210,10 @@ func TestServer_DataStoredEncryptedAtRest(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, registerRes := postJSON(t, httpClient, apiURL, api.Request{
-		Action:    api.ActionRegister,
-		Username:  "alice",
-		Password:  "password123",
-		PublicKey: newTestPublicKey(t),
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !registerRes.Success {
 		t.Fatalf("register fallo: %s", registerRes.Message)
@@ -280,19 +300,19 @@ func TestServer_MessageFlowAndAccessControl(t *testing.T) {
 	}
 
 	_, aliceRegister := postJSON(t, httpClient, apiURL, api.Request{
-		Action:    api.ActionRegister,
-		Username:  "alice",
-		Password:  "password123",
-		PublicKey: alicePublicEncoded,
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: alicePublicEncoded,
 	})
 	if !aliceRegister.Success {
 		t.Fatalf("register alice fallo: %s", aliceRegister.Message)
 	}
 	_, bobRegister := postJSON(t, httpClient, apiURL, api.Request{
-		Action:    api.ActionRegister,
-		Username:  "bob",
-		Password:  "password123",
-		PublicKey: bobPublicEncoded,
+		Action:           api.ActionRegister,
+		Username:         "bob",
+		Password:         "password123",
+		MessagePublicKey: bobPublicEncoded,
 	})
 	if !bobRegister.Success {
 		t.Fatalf("register bob fallo: %s", bobRegister.Message)
@@ -390,5 +410,277 @@ func TestServer_MessageFlowAndAccessControl(t *testing.T) {
 	}
 	if strings.Contains(string(dbBytes), "hola bob") {
 		t.Fatal("el mensaje quedo en claro en server.db")
+	}
+}
+
+func TestServer_KeyAuthSetupAndLogin(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	pub, priv, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: pub,
+	})
+	if !r.Success {
+		t.Fatalf("keySetup falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success || !r.RequiresKey || r.TempToken == "" || len(r.Challenge) == 0 {
+		t.Fatalf("login debería devolver RequiresKey: success=%v requires_key=%v msg=%q", r.Success, r.RequiresKey, r.Message)
+	}
+
+	signature := ed25519.Sign(priv, r.Challenge)
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionLoginKey,
+		TempToken: r.TempToken,
+		Signature: signature,
+	})
+	if !r.Success || r.Token == "" {
+		t.Fatalf("loginKey falló: success=%v msg=%q token=%q", r.Success, r.Message, r.Token)
+	}
+}
+
+func TestServer_KeyAuthInvalidSignature(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	pub, _, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+	_, wrongPriv, err := utils.GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (2) falló: %v", err)
+	}
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: pub,
+	})
+	if !r.Success {
+		t.Fatalf("keySetup falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.RequiresKey {
+		t.Fatalf("login debería devolver RequiresKey")
+	}
+
+	wrongSig := ed25519.Sign(wrongPriv, r.Challenge)
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionLoginKey,
+		TempToken: r.TempToken,
+		Signature: wrongSig,
+	})
+	if r.Success {
+		t.Fatal("loginKey debería fallar con firma incorrecta")
+	}
+}
+
+func TestServer_KeyAuthInvalidPublicKeySize(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionKeySetup,
+		Username:  "alice",
+		Token:     r.Token,
+		PublicKey: []byte("clave-corta"),
+	})
+	if r.Success {
+		t.Fatal("keySetup debería fallar con clave pública de tamaño incorrecto")
+	}
+}
+
+func TestServer_VerifyPassword(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "alice",
+		Token:    token,
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("verifyPassword con contraseña correcta falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "alice",
+		Token:    token,
+		Password: "wrongpassword",
+	})
+	if r.Success {
+		t.Fatal("verifyPassword debería fallar con contraseña incorrecta")
+	}
+}
+
+func TestServer_VerifyPassword_InvalidToken(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "alice",
+		Token:    "token-invalido",
+		Password: "password123",
+	})
+	if r.Success {
+		t.Fatal("verifyPassword debería fallar con token inválido")
+	}
+}
+
+func TestServer_VerifyPassword_UnknownUser(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionVerifyPassword,
+		Username: "noexiste",
+		Token:    r.Token,
+		Password: "password123",
+	})
+	if r.Success {
+		t.Fatal("verifyPassword debería fallar con usuario inexistente")
 	}
 }

@@ -17,7 +17,7 @@ func TestMain(m *testing.M) {
 func TestKeyRoundTrip(t *testing.T) {
 	username := "testuser"
 	t.Cleanup(func() {
-		os.Remove(keyPath(username))
+		os.Remove(KeyPath(username))
 	})
 
 	pk, sk, err := GenerateKeyPair()
@@ -50,7 +50,7 @@ func TestKeyRoundTrip(t *testing.T) {
 func TestDecryptWrongPassword(t *testing.T) {
 	username := "testuser2"
 	t.Cleanup(func() {
-		os.Remove(keyPath(username))
+		os.Remove(KeyPath(username))
 	})
 
 	_, sk, err := GenerateKeyPair()
@@ -70,7 +70,7 @@ func TestDecryptWrongPassword(t *testing.T) {
 
 func TestDecryptCorruptFile(t *testing.T) {
 	username := "testuser3"
-	path := keyPath(username)
+	path := KeyPath(username)
 	t.Cleanup(func() {
 		os.Remove(path)
 	})
@@ -85,5 +85,64 @@ func TestDecryptCorruptFile(t *testing.T) {
 	_, err := DecryptPrivateKey("cualquier-password", username)
 	if err == nil {
 		t.Fatal("debería haber fallado con archivo corrupto")
+	}
+}
+func TestVerifySignature_Valid(t *testing.T) {
+	pub, priv, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+
+	message := []byte("challenge-aleatorio")
+	signature := ed25519.Sign(priv, message)
+
+	if !VerifySignature(pub, message, signature) {
+		t.Fatal("VerifySignature debería devolver true para una firma válida")
+	}
+}
+
+func TestVerifySignature_WrongMessage(t *testing.T) {
+	pub, priv, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+
+	signature := ed25519.Sign(priv, []byte("mensaje original"))
+
+	if VerifySignature(pub, []byte("mensaje modificado"), signature) {
+		t.Fatal("VerifySignature debería devolver false para mensaje modificado")
+	}
+}
+
+func TestVerifySignature_WrongKey(t *testing.T) {
+	_, priv, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+	otherPub, _, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair (2) falló: %v", err)
+	}
+
+	message := []byte("challenge-aleatorio")
+	signature := ed25519.Sign(priv, message)
+
+	if VerifySignature(otherPub, message, signature) {
+		t.Fatal("VerifySignature debería devolver false para clave pública incorrecta")
+	}
+}
+
+func TestVerifySignature_TamperedSignature(t *testing.T) {
+	pub, priv, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair falló: %v", err)
+	}
+
+	message := []byte("challenge-aleatorio")
+	signature := ed25519.Sign(priv, message)
+	signature[0] ^= 0xff
+
+	if VerifySignature(pub, message, signature) {
+		t.Fatal("VerifySignature debería devolver false para firma manipulada")
 	}
 }
