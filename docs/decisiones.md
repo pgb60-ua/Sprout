@@ -183,3 +183,148 @@ al rechazar una petición de admin, y el cliente limpiara `isAdmin` al recibirlo
 a `SessionExpired`). Se descartó: añade complejidad en 6 handlers y en el cliente para un caso
 edge (admin se quita sus propios permisos con sesión activa) que es cosmético, no de seguridad.
 El servidor ya rechaza cada petición individualmente mediante `requireRole`.
+
+---
+
+## Metadatos de ficheros
+
+### Metadatos cifrados en bbolt
+Los metadatos de ficheros y carpetas se almacenan en un namespace propio (`file_metadata`).
+Aunque bbolt no cifra buckets ni claves, los valores se cifran antes de guardarse usando
+AES-GCM y una subclave derivada de la DEK de sesión del usuario.
+
+El valor guardado es un `gcmBlob` con `Version`, `Nonce` y `Ciphertext`.
+El JSON con los campos de metadatos solo existe en claro en memoria, antes de cifrar o después
+de descifrar.
+
+La clave de cifrado de cada entrada usa el contexto del dato:
+`deriveSubkey(dek, "file_metadata:"+normalizedPath, dekLen)`.
+Así, los metadatos quedan integrados en el modelo de cifrado existente y no se introduce
+un secreto nuevo que el usuario tenga que gestionar.
+
+### Claves opacas para no exponer rutas
+No se guardan rutas en claro como claves de bbolt.
+La clave de índice se deriva con `deriveSubkey(dek, "file_metadata_index", dekLen)` y se usa
+como clave HMAC-SHA256 sobre la ruta normalizada.
+
+La clave final del registro combina el usuario con ese HMAC:
+`<username>\x00<hex(HMAC(file_metadata_index, normalized-path))>`.
+
+Esto evita entradas visibles como `alice:docs/nota.txt` dentro de `server.db`.
+Limitaciones aceptadas:
+- los nombres de buckets siguen siendo visibles porque bbolt no los cifra;
+- el nombre de usuario sigue formando parte de la clave;
+- las claves del namespace `file_timestamps` no se han migrado a HMAC y siguen usando
+  `username + "\x00" + reqPath`.
+
+### Separación entre metadatos y detección de cambios externos
+El proyecto ya mantiene timestamps cifrados en `file_timestamps` mediante `storeFileTimestamp`
+y `checkFileTimestamp`.
+Los metadatos tienen sus propios campos `CreatedAt`, `ModifiedAt` y `AccessedAt`, pero no sustituyen
+esa lógica.
+
+Regla decidida:
+- `createFile` sigue guardando el timestamp de control.
+- `modifyFile` valida el timestamp antes de escribir, guarda el nuevo timestamp y actualiza `ModifiedAt`.
+- `readFile` valida el timestamp antes de descifrar y actualiza `AccessedAt` si puede guardar metadatos.
+- `deleteFile` borra el timestamp asociado.
+- `deleteDir` borra los timestamps del árbol mediante prefijo.
+- La detección de modificaciones externas sigue dependiendo de `file_timestamps`.
+
+Los valores de `file_timestamps` están cifrados con una subclave
+`deriveSubkey(baseDEK, "timestamp:"+reqPath, dekLen)`, pero sus claves de bbolt todavía exponen
+usuario y ruta.
+
+### API específica para consulta y actualización
+Se añaden dos acciones:
+`getFileMetadata` y `updateFileMetadata`.
+
+La respuesta puede incluir un `FileMetadata` individual o entradas enriquecidas en listados mediante
+`FileEntries`, manteniendo también `Files []string` para no romper el cliente existente.
+
+Los metadatos incluyen:
+- ruta
+- nombre
+- si es fichero o carpeta
+- tamaño
+- propietario
+- permisos lógicos
+- fechas de creación, modificación y acceso
+- plataforma
+
+### Metadatos creados de forma perezosa
+`ensureFileMetadata` intenta cargar los metadatos existentes y, si no existen, los crea a partir
+del estado actual del fichero o carpeta.
+Esto permite que `getFileMetadata` y `listFiles` reparen entradas antiguas o incompletas generando
+metadatos en el primer acceso.
+
+La carpeta raíz lógica del usuario se trata como metadato virtual:
+- `rootFileMetadata` genera una entrada en memoria con permisos `rwx------`;
+- no se persiste en `file_metadata`;
+- se usa para calcular permisos efectivos en rutas hijas.
+
+### Solo se modifican permisos lógicos desde la API
+En esta fase `updateFileMetadata` solo permite cambiar `Permissions`, recibido en `Request.Data`.
+No se permite modificar `Owner` porque el sistema todavía no implementa compartición real,
+transferencia de propiedad ni redistribución de claves entre usuarios.
+
+Los permisos son lógicos de Sprout, no permisos reales del sistema operativo.
+Valores iniciales:
+- ficheros: `rw-------`
+- carpetas: `rwx------`
+
+El formato aceptado tiene 9 caracteres y cada tripleta debe respetar el orden `rwx`, permitiendo
+usar `-` para permisos desactivados. Aunque se guarda el string completo, la comprobación efectiva
+actual usa la primera tripleta.
+
+No se permite modificar permisos de la carpeta raíz del usuario (`.` o ruta normalizada vacía).
+
+### Metadatos iniciales derivados del sistema y de la sesión
+Al crear ficheros o carpetas se generan metadatos iniciales:
+- `Owner`: usuario autenticado
+- `CreatedAt`: `time.Now().UTC()`
+- `ModifiedAt`: `time.Now().UTC()`
+- `Platform`: `runtime.GOOS`
+- `Name`, `Size` e `IsDir`: derivados de `os.Stat`
+
+La ruta se normaliza antes de calcular claves, cifrar y devolver datos.
+Todas las operaciones requieren sesión válida, DEK disponible mediante `getSessionKey` y ruta validada
+con `safePath`.
+
+### Permisos lógicos aplicados a operaciones de ficheros
+Los permisos no son solo informativos: el servidor los consulta antes de ejecutar operaciones.
+La comprobación se hace sobre el árbol de ancestros, empezando por la raíz virtual del usuario.
+Si cualquier elemento del camino no concede el permiso requerido, la operación se rechaza.
+
+Reglas aplicadas:
+- `readFile` requiere permiso `r` en todos los ancestros y en el fichero.
+- `modifyFile` requiere permiso `w` en todos los ancestros y en el fichero.
+- `deleteFile` requiere permiso `w` en todos los ancestros y en el fichero.
+- `listFiles` requiere permiso `r` en todos los ancestros y en el directorio listado.
+- `createFile` y `createDir` requieren permiso `w` en todos los ancestros y en el directorio padre.
+- `deleteDir` requiere permiso `w` en todos los ancestros y en el directorio eliminado.
+
+`getFileMetadata` y `updateFileMetadata` requieren token válido, ruta segura, fichero o carpeta
+existente y DEK de sesión, pero no aplican una comprobación adicional de permisos lógicos.
+
+### Integración con operaciones de ficheros
+Las operaciones existentes se amplían sin cambiar su contrato principal:
+- `createFile`: crea metadatos iniciales después de escribir y guardar timestamp.
+- `modifyFile`: actualiza contenido, timestamp y `ModifiedAt`.
+- `readFile`: actualiza `AccessedAt`.
+- `deleteFile`: elimina fichero, timestamp y metadatos.
+- `createDir`: crea metadatos iniciales del directorio.
+- `deleteDir`: elimina metadatos y timestamps de la carpeta y de sus hijos antes de `os.RemoveAll`.
+- `listFiles`: devuelve la lista clásica y, además, entradas con metadatos.
+- al borrar el último fichero o carpeta, se elimina la raíz física vacía del usuario.
+
+### Cliente CLI
+El menú de gestión de ficheros incorpora opciones para ver metadatos y modificar permisos lógicos.
+La vista muestra ruta, propietario, permisos, tamaño, fechas, plataforma y si la entrada es fichero
+o carpeta.
+
+El cliente también muestra el árbol de permisos efectivos antes de leer, modificar o borrar, para
+que el usuario vea qué permiso de la ruta puede bloquear la operación.
+
+Si el servidor devuelve un error de timestamp en operaciones de lectura o modificación, el cliente
+reutiliza el flujo existente para ofrecer borrar ficheros fuera de sincronía.
