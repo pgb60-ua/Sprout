@@ -29,6 +29,11 @@ type storedMessage struct {
 	Ciphertext string `json:"ciphertext"`
 }
 
+type messageRollbackEntry struct {
+	namespace string
+	key       []byte
+}
+
 func (s *server) getPublicKey(req api.Request) api.Response {
 	if req.Username == "" || req.Token == "" || req.Recipient == "" {
 		return api.Response{Success: false, Message: "Faltan datos"}
@@ -89,17 +94,34 @@ func (s *server) sendMessage(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al serializar mensaje"}
 	}
 
-	if err := s.db.Put(messagesNamespace, []byte(id), msgBytes); err != nil {
+	messageKey := []byte(id)
+	recipientIndexKey := []byte(messageIndexKey(req.Recipient, createdAt, id))
+	senderIndexKey := []byte(messageIndexKey(req.Username, createdAt, id))
+
+	if err := s.db.Put(messagesNamespace, messageKey, msgBytes); err != nil {
 		return api.Response{Success: false, Message: "Error al guardar mensaje"}
 	}
-	if err := s.db.Put(messagesByRecipientNamespace, []byte(messageIndexKey(req.Recipient, createdAt, id)), []byte(id)); err != nil {
+	if err := s.db.Put(messagesByRecipientNamespace, recipientIndexKey, messageKey); err != nil {
+		s.rollbackMessageSend(messageRollbackEntry{namespace: messagesNamespace, key: messageKey})
 		return api.Response{Success: false, Message: "Error al indexar mensaje recibido"}
 	}
-	if err := s.db.Put(messagesBySenderNamespace, []byte(messageIndexKey(req.Username, createdAt, id)), []byte(id)); err != nil {
+	if err := s.db.Put(messagesBySenderNamespace, senderIndexKey, messageKey); err != nil {
+		s.rollbackMessageSend(
+			messageRollbackEntry{namespace: messagesByRecipientNamespace, key: recipientIndexKey},
+			messageRollbackEntry{namespace: messagesNamespace, key: messageKey},
+		)
 		return api.Response{Success: false, Message: "Error al indexar mensaje enviado"}
 	}
 
 	return api.Response{Success: true, Message: "Mensaje enviado", MessageID: id}
+}
+
+func (s *server) rollbackMessageSend(entries ...messageRollbackEntry) {
+	for _, entry := range entries {
+		if err := s.db.Delete(entry.namespace, entry.key); err != nil && s.log != nil {
+			s.log.Printf("No se pudo revertir envio parcial de mensaje en %q/%q: %v", entry.namespace, string(entry.key), err)
+		}
+	}
 }
 
 func (s *server) listMessages(req api.Request) api.Response {
