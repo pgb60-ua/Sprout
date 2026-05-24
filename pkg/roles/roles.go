@@ -219,3 +219,26 @@ func (rs *RoleStore) HasAnyRole(username string, roles ...string) (bool, error) 
 	}
 	return false, nil
 }
+
+func (rs *RoleStore) ListUsersByRole(role string) ([]string, error) {
+	keys, err := rs.db.ListKeys(bucketUserRoles)
+	if errors.Is(err, store.ErrNamespaceNotFound) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	users := make([]string, 0)
+	for _, k := range keys {
+		ur, err := getUserRoles(rs.db, string(k))
+		if err != nil {
+			return nil, err
+		}
+		if slices.Contains(ur.Roles, role) {
+			users = append(users, ur.Username)
+		}
+	}
+	slices.Sort(users)
+	return users, nil
+}

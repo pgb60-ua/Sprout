@@ -300,3 +300,25 @@ func TestRoleStore_DeleteRoleCleansUserRoles(t *testing.T) {
 		t.Fatal("el rol 'moderator' no debería aparecer en user_roles tras ser eliminado")
 	}
 }
+
+func TestRoleStore_ListUsersByRole(t *testing.T) {
+	rs := newTestRoleStore(t)
+
+	if err := rs.CreateRole("shared_docs"); err != nil {
+		t.Fatalf("CreateRole falló: %v", err)
+	}
+	if err := rs.AssignRole("alice", "shared_docs"); err != nil {
+		t.Fatalf("AssignRole alice falló: %v", err)
+	}
+	if err := rs.AssignRole("bob", "shared_docs"); err != nil {
+		t.Fatalf("AssignRole bob falló: %v", err)
+	}
+
+	users, err := rs.ListUsersByRole("shared_docs")
+	if err != nil {
+		t.Fatalf("ListUsersByRole falló: %v", err)
+	}
+	if !slices.Equal(users, []string{"alice", "bob"}) {
+		t.Fatalf("usuarios inesperados para el rol compartido: %v", users)
+	}
+}

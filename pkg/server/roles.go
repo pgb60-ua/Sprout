@@ -1,6 +1,9 @@
 package server
 
 import (
+	"sort"
+	"strings"
+
 	"sprout/pkg/api"
 	"sprout/pkg/roles"
 )
@@ -69,6 +72,26 @@ func (s *server) getUserRoles(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al obtener roles"}
 	}
 	return api.Response{Success: true, Roles: userRoles}
+}
+
+func (s *server) listSharedFolders(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+	userRoles, err := s.roles.GetUserRoles(req.Username)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener las carpetas compartidas"}
+	}
+
+	sharedFolders := make([]string, 0)
+	for _, role := range userRoles {
+		if strings.HasPrefix(role, sharedFolderPrefix) {
+			sharedFolders = append(sharedFolders, role)
+		}
+	}
+	sort.Strings(sharedFolders)
+
+	return api.Response{Success: true, SharedFolders: sharedFolders}
 }
 
 func (s *server) createRole(req api.Request) api.Response {

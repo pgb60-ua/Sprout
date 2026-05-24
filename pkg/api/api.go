@@ -50,6 +50,12 @@ const (
 	ActionGetUserRoles = "getUserRoles"
 	ActionCreateRole   = "createRole"
 	ActionDeleteRole   = "deleteRole"
+
+	// Shared folder management
+	ActionSharedFolderAddMember    = "sharedFolderAddMember"
+	ActionSharedFolderRemoveMember = "sharedFolderRemoveMember"
+	ActionSharedFolderListMembers  = "sharedFolderListMembers"
+	ActionListSharedFolders        = "listSharedFolders"
 )
 
 type Request struct {
@@ -108,7 +114,8 @@ type Response struct {
 	Files          []string         `json:"files,omitempty"`
 	FileMetadata   *FileMetadata    `json:"file_metadata,omitempty"`
 	FileEntries    []FileEntry      `json:"file_entries,omitempty"`
-  Messages       []MessageSummary `json:"messages,omitempty"`
+	Messages       []MessageSummary `json:"messages,omitempty"`
+	SharedFolders  []string         `json:"shared_folders,omitempty"`
 	MessageID      string           `json:"message_id,omitempty"`
 	PublicKey      string           `json:"public_key,omitempty"`
 	Ciphertext     string           `json:"ciphertext,omitempty"`
