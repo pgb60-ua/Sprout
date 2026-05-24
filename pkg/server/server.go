@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sprout/pkg/remotecommon"
 	"strconv"
 	"strings"
@@ -227,6 +228,8 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.getFileMetadata(req)
 	case api.ActionUpdateFileMetadata:
 		res = s.updateFileMetadata(req)
+	case api.ActionFilterFilesByTag:
+		res = s.filterFilesByTag(req)
 	case api.ActionSharedFolderAddMember:
 		res = s.sharedFolderAddMember(req)
 	case api.ActionSharedFolderRemoveMember:
@@ -999,6 +1002,94 @@ func (s *server) listFiles(req api.Request) api.Response {
 	return api.Response{Success: true, Message: "Listado correcto", Files: files, FileEntries: fileEntries}
 }
 
+func (s *server) filterFilesByTag(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+	if strings.TrimSpace(req.Tag) == "" {
+		return api.Response{Success: false, Message: "Falta el tag a filtrar"}
+	}
+
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+	path := ctx.absPath
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return api.Response{Success: true, Message: "No se han encontrado elementos con ese tag", FileEntries: []api.FileEntry{}}
+		}
+		return api.Response{Success: false, Message: "Error al filtrar por tag"}
+	}
+	if !info.IsDir() {
+		return api.Response{Success: false, Message: "La ruta no es un directorio"}
+	}
+	if perm := s.requirePathPermission(req.Username, ctx.baseDEK, req.Path, true, 'r'); !perm.Success {
+		return perm
+	}
+
+	baseDirAbs, err := filepath.Abs(ctx.baseDir)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al filtrar por tag"}
+	}
+
+	entries := make([]api.FileEntry, 0)
+	walkErr := filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		currentInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(baseDirAbs, currentPath)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			rel = ""
+		}
+		meta, err := s.loadFileMetadata(ctx.storageUser, ctx.baseDEK, rel, currentInfo)
+		if err != nil {
+			if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
+				return nil
+			}
+			return err
+		}
+		if !fileMetadataHasTag(meta, req.Tag) {
+			return nil
+		}
+		name := meta.Name
+		if meta.IsDir {
+			name += "/"
+		}
+		entries = append(entries, api.FileEntry{
+			Name:     name,
+			Path:     meta.Path,
+			Metadata: &meta,
+		})
+		return nil
+	})
+	if walkErr != nil {
+		return api.Response{Success: false, Message: "Error al filtrar por tag"}
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Path < entries[j].Path
+	})
+
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		files = append(files, entry.Name)
+	}
+	message := "Filtro correcto"
+	if len(entries) == 0 {
+		message = "No se han encontrado elementos con ese tag"
+	}
+	return api.Response{Success: true, Message: message, Files: files, FileEntries: entries}
+}
+
 func (s *server) getFileMetadata(req api.Request) api.Response {
 	if !s.isTokenValid(req.Username, req.Token) {
 		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
@@ -1032,7 +1123,7 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	if normalizedFilePath(req.Path) == "" {
 		return api.Response{Success: false, Message: "No se puede modificar la carpeta raiz del usuario"}
 	}
-	if req.Data == "" && req.Role == "" {
+	if req.Data == "" && req.Role == "" && req.Tags == nil {
 		return api.Response{Success: false, Message: "No hay cambios de metadatos"}
 	}
 	if req.Data != "" && !validFilePermissions(req.Data) {
@@ -1065,6 +1156,9 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	}
 	if req.Role != "" {
 		meta.Role = req.Role
+	}
+	if req.Tags != nil {
+		meta.Tags = normalizeFileTags(req.Tags)
 	}
 	meta.ModifiedAt = time.Now().UTC()
 	if err := s.saveFileMetadata(ctx.storageUser, ctx.baseDEK, meta); err != nil {
