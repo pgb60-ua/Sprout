@@ -3,12 +3,14 @@ package server
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"sprout/pkg/api"
+	"sprout/pkg/store"
 )
 
 const sharedFolderPrefix = "compartida_"
@@ -78,15 +80,17 @@ func (s *server) loadSharedFolderKey(owner string) ([]byte, error) {
 func (s *server) ensureSharedFolderKey(owner string) ([]byte, error) {
 	if key, err := s.loadSharedFolderKey(owner); err == nil {
 		return key, nil
-	}
-	key := make([]byte, dekLen)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("no se pudo generar la clave compartida: %w", err)
-	}
-	if err := s.db.Put(sharedFolderKeyNamespace, []byte(owner), []byte(base64.RawStdEncoding.EncodeToString(key))); err != nil {
+	} else if !errors.Is(err, store.ErrKeyNotFound) && !errors.Is(err, store.ErrNamespaceNotFound) {
 		return nil, err
 	}
-	return key, nil
+	newKey := make([]byte, dekLen)
+	if _, err := rand.Read(newKey); err != nil {
+		return nil, fmt.Errorf("no se pudo generar la clave compartida: %w", err)
+	}
+	if err := s.db.Put(sharedFolderKeyNamespace, []byte(owner), []byte(base64.RawStdEncoding.EncodeToString(newKey))); err != nil {
+		return nil, err
+	}
+	return newKey, nil
 }
 
 func (s *server) deleteSharedFolderKey(owner string) error {
@@ -108,11 +112,28 @@ func (s *server) resolveFileAccessContext(username, reqPath string) (fileAccessC
 			return fileAccessContext{}, fmt.Errorf("no se pudo cargar la clave de la carpeta compartida")
 		}
 		baseDir := sharedFolderBaseDir(owner)
+		// build absolute paths and ensure the resulting target stays inside baseDir
+		baseDirAbs, err := filepath.Abs(baseDir)
+		if err != nil {
+			return fileAccessContext{}, err
+		}
+		candidate := filepath.Join(baseDir, filepath.FromSlash(normalized))
+		candidateAbs, err := filepath.Abs(candidate)
+		if err != nil {
+			return fileAccessContext{}, err
+		}
+		rel, err := filepath.Rel(baseDirAbs, candidateAbs)
+		if err != nil {
+			return fileAccessContext{}, err
+		}
+		if strings.HasPrefix(rel, "..") {
+			return fileAccessContext{}, fmt.Errorf("ruta fuera del directorio compartido")
+		}
 		return fileAccessContext{
 			owner:       owner,
 			storageUser: owner,
 			baseDEK:     sharedKey,
-			absPath:     filepath.Join(baseDir, filepath.FromSlash(normalized)),
+			absPath:     candidateAbs,
 			isShared:    true,
 			baseDir:     baseDir,
 			rootPath:    sharedFolderRootPath(owner),
@@ -124,17 +145,33 @@ func (s *server) resolveFileAccessContext(username, reqPath string) (fileAccessC
 		return fileAccessContext{}, fmt.Errorf("Sesion inconsistente: vuelve a iniciar sesion")
 	}
 	baseDir := filepath.Join("data", "files", username)
+	baseDirAbs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return fileAccessContext{}, err
+	}
+	candidate := filepath.Join(baseDir, filepath.FromSlash(normalized))
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return fileAccessContext{}, err
+	}
+	rel, err := filepath.Rel(baseDirAbs, candidateAbs)
+	if err != nil {
+		return fileAccessContext{}, err
+	}
+	if strings.HasPrefix(rel, "..") {
+		return fileAccessContext{}, fmt.Errorf("ruta fuera del directorio del usuario")
+	}
 	return fileAccessContext{
 		owner:       username,
 		storageUser: username,
 		baseDEK:     baseDEK,
-		absPath:     filepath.Join(baseDir, filepath.FromSlash(normalized)),
+		absPath:     candidateAbs,
 		isShared:    false,
 		baseDir:     baseDir,
 	}, nil
 }
 
-func (s *server) createDefaultSharedFolder(username string, dek []byte) error {
+func (s *server) createDefaultSharedFolder(username string) error {
 	sharedKey, err := s.ensureSharedFolderKey(username)
 	if err != nil {
 		return err
@@ -171,29 +208,35 @@ func (s *server) loadSharedFolderMetadata(req api.Request) (api.FileMetadata, st
 	if req.Path == "" {
 		return api.FileMetadata{}, "", nil, fmt.Errorf("Falta el path de la carpeta compartida")
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.FileMetadata{}, "", nil, err
 	}
-	info, err := os.Stat(path)
+	if !ctx.isShared {
+		return api.FileMetadata{}, "", nil, fmt.Errorf("La ruta no es una carpeta compartida")
+	}
+	// only the owner may manage shared-folder metadata
+	if req.Username != ctx.owner {
+		return api.FileMetadata{}, "", nil, fmt.Errorf("No autorizado")
+	}
+	if err := os.MkdirAll(ctx.baseDir, 0755); err != nil {
+		return api.FileMetadata{}, "", nil, err
+	}
+	info, err := os.Stat(ctx.absPath)
 	if err != nil {
 		return api.FileMetadata{}, "", nil, fmt.Errorf("La carpeta compartida no existe")
 	}
 	if !info.IsDir() {
 		return api.FileMetadata{}, "", nil, fmt.Errorf("La ruta no es un directorio")
 	}
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.FileMetadata{}, "", nil, fmt.Errorf("Sesion inconsistente: vuelve a iniciar sesion")
-	}
-	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, req.Path, info)
 	if err != nil {
 		return api.FileMetadata{}, "", nil, err
 	}
-	if meta.Owner != req.Username {
-		return api.FileMetadata{}, "", nil, fmt.Errorf("No autorizado")
+	if meta.Owner != ctx.owner {
+		return api.FileMetadata{}, "", nil, fmt.Errorf("Metadatos inconsistentes de la carpeta compartida")
 	}
-	return meta, path, dek, nil
+	return meta, ctx.absPath, ctx.baseDEK, nil
 }
 
 func (s *server) ensureSharedFolderRole(username string, dek []byte, meta *api.FileMetadata) error {

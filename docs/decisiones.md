@@ -279,9 +279,12 @@ dueño y solo ese usuario puede añadir o quitar miembros.
 La pertenencia se modela con un rol por carpeta usando la convención `compartida_<owner>`.
 Así se reutiliza el sistema de roles existente sin introducir ACLs nuevas para cada fichero.
 
-No se cambió el almacenamiento físico ni el esquema criptográfico de los ficheros: cada usuario
-sigue teniendo su propio árbol y sus claves. Por eso esta primera versión documenta y gestiona
-miembros, pero no redefine todavía una carpeta física común para varios usuarios.
+En esta versión existe una carpeta física compartida para cada dueño bajo
+`data/files/shared/<owner>`. El directorio raíz visible para los usuarios es
+`compartida_<owner>` y su contenido reside en `data/files/shared/<owner>/compartida_<owner>`.
+Cada carpeta compartida tiene su propia clave de cifrado y un rol `compartida_<owner>` que
+gestiona la pertenencia. El dueño (`owner`) actúa como administrador de esa carpeta y es el único
+capaz de añadir o quitar miembros.
 
 Los permisos son lógicos de Sprout, no permisos reales del sistema operativo ni un mecanismo de
 compartición por sí mismos.

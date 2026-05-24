@@ -316,7 +316,7 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
 	}
 
-	if err := s.createDefaultSharedFolder(req.Username, dek); err != nil {
+	if err := s.createDefaultSharedFolder(req.Username); err != nil {
 		s.rollbackUserRegistration(req.Username, publicKeysNamespace, "userdata", cryptoNamespace, "auth")
 		_ = os.RemoveAll(filepath.Join("data", "files", req.Username))
 		return api.Response{Success: false, Message: "Error al crear la carpeta compartida inicial"}
@@ -558,6 +558,14 @@ func (s *server) isTokenValid(username, token string) bool {
 
 // safePath valida el path para evitar Path Traversal.
 func (s *server) safePath(username, reqPath string) (string, error) {
+	// quick rejects for obviously unsafe inputs
+	if filepath.IsAbs(reqPath) {
+		return "", fmt.Errorf("ruta absoluta no permitida")
+	}
+	if strings.Contains(reqPath, "..") {
+		return "", fmt.Errorf("ruta con segmentos '..' no permitida")
+	}
+
 	ctx, err := s.resolveFileAccessContext(username, reqPath)
 	if err != nil {
 		return "", err

@@ -151,17 +151,11 @@ func (s *server) ensureFileMetadata(username string, dek []byte, path string, in
 	}
 
 	now := time.Now().UTC()
-	// Default permissions: owner-only. If the path belongs to a shared folder
-	// owned by `username`, grant group (role) access by default so members
-	// of the shared folder can access newly created entries.
 	permissions := "rw-------"
 	if info.IsDir() {
 		permissions = "rwx------"
 	}
 	if _, ok := sharedFolderOwnerFromPath(path); ok {
-		// For any path inside a shared folder, make directories and files
-		// group-accessible by default so members can access items created
-		// inside the shared area regardless of who created them.
 		if info.IsDir() {
 			permissions = "rwxrwx---"
 		} else {
