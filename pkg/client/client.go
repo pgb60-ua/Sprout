@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"sprout/pkg/api"
+	"sprout/pkg/backups"
+	"sprout/pkg/logs"
 	"sprout/pkg/netcfg"
 	"sprout/pkg/ui"
 	"sprout/pkg/utils"
@@ -92,7 +94,7 @@ func (c *client) runLoop() {
 				keyOption = "Desactivar clave publica"
 			}
 
-			// Usuario activo: Ver datos, Actualizar datos, Logout, Salir
+			// Usuario activo: Ver datos, Actualizar datos, TOTP, ficheros, panel admin, Logout, Salir
 			options = []string{
 				"Ver datos",
 				"Actualizar datos",
@@ -546,6 +548,27 @@ func newSecureHTTPClient(caFile string) (*http.Client, error) {
 		Timeout:   5 * time.Second,
 		Transport: transport,
 	}, nil
+}
+
+func (c *client) accessRemoteLogs() {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a logs remotos **")
+
+	logs.Run()
+
+	fmt.Println("Visor de logs finalizado.")
+}
+
+func (c *client) accessRemoteBackups() bool {
+	ui.ClearScreen()
+	fmt.Println("** Acceso a backups **")
+
+	if !ui.Confirm("¿Quieres continuar") {
+		return false
+	}
+
+	backups.Run()
+	return true
 }
 
 // fileManagerMenu permite al usuario gestionar archivos y carpetas.
@@ -1207,6 +1230,8 @@ func (c *client) adminMenu() {
 	for {
 		ui.ClearScreen()
 		choice := ui.PrintMenu("Administración", []string{
+			"Acceder a logs",
+			"Acceder a backups",
 			"Listar roles",
 			"Crear rol",
 			"Eliminar rol",
@@ -1217,37 +1242,43 @@ func (c *client) adminMenu() {
 		})
 		switch choice {
 		case 1:
+			c.accessRemoteLogs()
+		case 2:
+			if c.accessRemoteBackups() {
+				return
+			}
+		case 3:
 			res := c.sendRequest(api.Request{Action: api.ActionListRoles, Username: c.currentUser, Token: c.authToken})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Roles:", res.Roles)
-		case 2:
+		case 4:
 			role := ui.ReadInput("Nombre del nuevo rol")
 			res := c.sendRequest(api.Request{Action: api.ActionCreateRole, Username: c.currentUser, Token: c.authToken, Role: role})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 3:
+		case 5:
 			role := ui.ReadInput("Nombre del rol a eliminar")
 			res := c.sendRequest(api.Request{Action: api.ActionDeleteRole, Username: c.currentUser, Token: c.authToken, Role: role})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 4:
+		case 6:
 			target := ui.ReadInput("Nombre de usuario")
 			res := c.sendRequest(api.Request{Action: api.ActionGetUserRoles, Username: c.currentUser, Token: c.authToken, TargetUser: target})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Roles de", target+":", res.Roles)
-		case 5:
+		case 7:
 			target := ui.ReadInput("Nombre de usuario")
 			role := ui.ReadInput("Rol a asignar")
 			res := c.sendRequest(api.Request{Action: api.ActionAssignRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 6:
+		case 8:
 			target := ui.ReadInput("Nombre de usuario")
 			role := ui.ReadInput("Rol a quitar")
 			res := c.sendRequest(api.Request{Action: api.ActionRemoveRole, Username: c.currentUser, Token: c.authToken, TargetUser: target, Role: role})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 7:
+		case 9:
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
