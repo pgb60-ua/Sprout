@@ -298,6 +298,13 @@ a usuarios que tengan el rol/grupo asociado al metadato (`Role`) y la tercera a 
 
 No se permite modificar permisos de la carpeta raíz del usuario (`.` o ruta normalizada vacía).
 
+### Gestión y filtrado por Etiquetas (Tags)
+Los tags se han implementado como un atributo dentro de la estructura `FileMetadata`, por lo que heredan todas sus garantías de seguridad nativas.
+- **Cifrado en reposo:** Los tags se cifran de forma transparente junto al resto de metadatos utilizando AES-256-GCM. La clave utilizada es una subclave derivada del contexto del dato (`dek` de sesión o `dek` de carpeta compartida). Esto significa que un atacante no puede saber qué tags se están usando ni en qué ficheros.
+- **Autorización y Control de Acceso:** No hay "tags públicos". La operación de filtrar por tags está protegida por una validación de permisos de lectura (`r`) sobre la ruta en la que se inicie la búsqueda, así mismo para añadirlos se requieren permisos lógicos (como escritura).
+- **Integridad de búsqueda en Carpetas Compartidas:** Tal como ocurre con la lectura de ficheros, la búsqueda de tags en una carpeta compartida (`compartida_<owner>`) resuelve primero el contexto (`resolveFileAccessContext`). Esto significa que si un miembro de la carpeta realiza el filtro por tag, usará implícitamente la clave compartida sin exponerla, y obtendrá todos los ficheros de la carpeta compartida que posean ese tag. Así, los metadatos actúan de manera colaborativa pero estrictamente acotada a quienes tienen acceso.
+- **Sanitización Robusta:** Los inputs provenientes del cliente referidos a los tags se iteran para aplicar `strings.TrimSpace`, ignorar cadenas vacías, de-duplicar resultados usando un mapa interno lógico y, finalmente, ordenarlos alfabéticamente antes de enviarse o persistirse, minimizando inyección de bytes basura o redundancia ineficiente.
+
 ### Seguridad de carpetas compartidas
 Cada carpeta compartida tiene su propia clave de cifrado, guardada en la DB bajo el namespace
 `shared_folder_keys` y asociada al dueño. Así se evita reutilizar la DEK personal del usuario para
