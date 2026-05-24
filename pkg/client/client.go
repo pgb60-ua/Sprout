@@ -562,7 +562,6 @@ func (c *client) accessRemoteLogs() {
 func (c *client) accessRemoteBackups() bool {
 	ui.ClearScreen()
 	fmt.Println("** Acceso a backups **")
-	fmt.Println("Se cerrará el programa principal para restaurar el backup.")
 
 	if !ui.Confirm("¿Quieres continuar") {
 		return false
