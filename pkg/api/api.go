@@ -67,7 +67,7 @@ type Request struct {
 	Data             string   `json:"data,omitempty"`
 	Path             string   `json:"path,omitempty"`
 	Tag              string   `json:"tag,omitempty"`
-	Tags             []string `json:"tags"`
+	Tags             []string `json:"tags,omitempty"`
 	ClearTags        bool     `json:"clear_tags,omitempty"`
 	Recipient        string   `json:"recipient,omitempty"`
 	MessageID        string   `json:"message_id,omitempty"`
