@@ -27,7 +27,7 @@ A continuación, se detallan los principales componentes:
 ## Qué hace este repositorio
 
 - Cliente de terminal con un menú básico.
-- Servidor HTTP con endpoint `POST /api` y mensajes JSON.
+- Servidor HTTPS con endpoint `POST /api` y mensajes JSON.
 - Registro/login/logout y lectura/escritura de un string asociado al usuario.
 - Persistencia en disco con `bbolt` (carpeta `data/`).
 
@@ -39,7 +39,7 @@ Este repositorio NO pretende ser una solución segura ni completa. Por diseño, 
 
 - Contraseñas sin PBKDF/sal (se guardan en claro).
 - Tokens inseguros (predecibles) y sin expiración real.
-- Comunicación por HTTP en claro (sin TLS).
+- No incluye mTLS (autenticación mutua por certificado cliente).
 - Sin cifrado en descanso (datos en la DB sin proteger).
 - Sin funcionalidad adicional, gestión de roles o permisos, etc.
 
@@ -68,15 +68,27 @@ Las modificaciones relacionadas con seguridad deberían intentar respetar esta s
 
 1. Instala Go en tu sistema.
 2. Clona este repositorio.
-3. Para ejecución rápida:
+3. Genera certificados de desarrollo:
+   ```
+   ./scripts/generate-dev-certs.sh
+   ```
+4. Para ejecución rápida:
    ```
    go run main.go
    ```
-4. Para compilar generando un ejecutable con nombre propio (en este caso *sprout*):
+5. Para compilar generando un ejecutable con nombre propio (en este caso *sprout*):
    ```
    go build -o sprout
    ```
    Luego ejecuta el binario generado (`./sprout` en Linux/macOS o `sprout.exe` en Windows).
+
+### Variables de entorno (red/TLS)
+
+- `SPROUT_SERVER_ADDR` (default `:8080`)
+- `SPROUT_API_ENDPOINT` (default `https://localhost:8080/api`)
+- `SPROUT_TLS_CERT_FILE` (default `data/certs/server-cert.pem`)
+- `SPROUT_TLS_KEY_FILE` (default `data/certs/server-key.pem`)
+- `SPROUT_TLS_CA_FILE` (default `data/certs/ca-cert.pem`)
 
 ---
 
