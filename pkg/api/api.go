@@ -2,6 +2,8 @@
 // para la comunicación entre servidor y cliente.
 package api
 
+import "time"
+
 const (
 	ActionRegister   = "register"
 	ActionLogin      = "login"
@@ -36,6 +38,10 @@ const (
 	ActionCreateDir  = "createDir"
 	ActionDeleteDir  = "deleteDir"
 	ActionListFiles  = "listFiles"
+
+	// File metadata management actions
+	ActionGetFileMetadata    = "getFileMetadata"
+	ActionUpdateFileMetadata = "updateFileMetadata"
 
 	// Role management
 	ActionAssignRole   = "assignRole"
@@ -73,6 +79,26 @@ type MessageSummary struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type FileMetadata struct {
+	Path        string    `json:"path"`
+	Name        string    `json:"name"`
+	IsDir       bool      `json:"is_dir"`
+	Size        int64     `json:"size"`
+	Owner       string    `json:"owner"`
+	Role        string    `json:"role,omitempty"`
+	Permissions string    `json:"permissions"`
+	CreatedAt   time.Time `json:"created_at"`
+	ModifiedAt  time.Time `json:"modified_at"`
+	AccessedAt  time.Time `json:"accessed_at,omitempty"`
+	Platform    string    `json:"platform"`
+}
+
+type FileEntry struct {
+	Name     string        `json:"name"`
+	Path     string        `json:"path"`
+	Metadata *FileMetadata `json:"metadata,omitempty"`
+}
+
 type Response struct {
 	Success        bool             `json:"success"`
 	Message        string           `json:"message"`
@@ -80,7 +106,9 @@ type Response struct {
 	Data           string           `json:"data,omitempty"`
 	SessionExpired bool             `json:"session_expired,omitempty"`
 	Files          []string         `json:"files,omitempty"`
-	Messages       []MessageSummary `json:"messages,omitempty"`
+	FileMetadata   *FileMetadata    `json:"file_metadata,omitempty"`
+	FileEntries    []FileEntry      `json:"file_entries,omitempty"`
+  Messages       []MessageSummary `json:"messages,omitempty"`
 	MessageID      string           `json:"message_id,omitempty"`
 	PublicKey      string           `json:"public_key,omitempty"`
 	Ciphertext     string           `json:"ciphertext,omitempty"`
