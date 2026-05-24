@@ -564,6 +564,8 @@ func (c *client) fileManagerMenu() {
 			"Ver metadatos",
 			"Modificar permisos lógicos",
 			"Modificar rol/grupo",
+			"Ver mis carpetas compartidas",
+			"Gestionar carpeta compartida",
 			"Volver al menú principal",
 		}
 
@@ -747,7 +749,77 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 11: // Volver al menú principal
+		case 11: // Ver mis carpetas compartidas
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionListSharedFolders,
+				Username: c.currentUser,
+				Token:    c.authToken,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("Carpetas compartidas:", res.SharedFolders)
+			}
+		case 12: // Gestionar carpeta compartida
+			c.sharedFolderMenu("compartida_" + c.currentUser)
+		case 13: // Volver al menú principal
+			return
+		}
+		ui.Pause("Pulsa [Enter] para continuar...")
+	}
+}
+
+func (c *client) sharedFolderMenu(path string) {
+	for {
+		ui.ClearScreen()
+		choice := ui.PrintMenu("Gestión de carpeta compartida", []string{
+			"Añadir usuario",
+			"Quitar usuario",
+			"Ver miembros",
+			"Volver",
+		})
+		switch choice {
+		case 1:
+			target := ui.ReadInput("Nombre de usuario a añadir")
+			res := c.sendRequest(api.Request{
+				Action:     api.ActionSharedFolderAddMember,
+				Username:   c.currentUser,
+				Token:      c.authToken,
+				Path:       path,
+				TargetUser: target,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("Miembros actuales:", res.Roles)
+			}
+		case 2:
+			target := ui.ReadInput("Nombre de usuario a quitar")
+			res := c.sendRequest(api.Request{
+				Action:     api.ActionSharedFolderRemoveMember,
+				Username:   c.currentUser,
+				Token:      c.authToken,
+				Path:       path,
+				TargetUser: target,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("Miembros actuales:", res.Roles)
+			}
+		case 3:
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionSharedFolderListMembers,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success {
+				fmt.Println("Miembros:", res.Roles)
+			}
+		case 4:
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")

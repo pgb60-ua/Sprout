@@ -201,6 +201,12 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.getFileMetadata(req)
 	case api.ActionUpdateFileMetadata:
 		res = s.updateFileMetadata(req)
+	case api.ActionSharedFolderAddMember:
+		res = s.sharedFolderAddMember(req)
+	case api.ActionSharedFolderRemoveMember:
+		res = s.sharedFolderRemoveMember(req)
+	case api.ActionSharedFolderListMembers:
+		res = s.sharedFolderListMembers(req)
 	// TOTP
 	case api.ActionTOTPSetup:
 		res = s.tOTPSetup(req)
@@ -228,6 +234,8 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.listRoles(req)
 	case api.ActionGetUserRoles:
 		res = s.getUserRoles(req)
+	case api.ActionListSharedFolders:
+		res = s.listSharedFolders(req)
 	case api.ActionCreateRole:
 		res = s.createRole(req)
 	case api.ActionDeleteRole:
@@ -308,7 +316,14 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
 	}
 
+	if err := s.createDefaultSharedFolder(req.Username, dek); err != nil {
+		s.rollbackUserRegistration(req.Username, publicKeysNamespace, "userdata", cryptoNamespace, "auth")
+		_ = os.RemoveAll(filepath.Join("data", "files", req.Username))
+		return api.Response{Success: false, Message: "Error al crear la carpeta compartida inicial"}
+	}
+
 	if err := s.roles.AssignRole(req.Username, roles.DefaultRole); err != nil {
+		_ = s.cleanupDefaultSharedFolder(req.Username)
 		s.rollbackUserRegistration(req.Username, publicKeysNamespace, "userdata", cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al asignar rol por defecto"}
 	}
@@ -543,25 +558,14 @@ func (s *server) isTokenValid(username, token string) bool {
 
 // safePath valida el path para evitar Path Traversal.
 func (s *server) safePath(username, reqPath string) (string, error) {
-	baseDir := filepath.Join("data", "files", username)
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		return "", err
-	}
-	baseDirAbs, err := filepath.Abs(baseDir)
+	ctx, err := s.resolveFileAccessContext(username, reqPath)
 	if err != nil {
 		return "", err
 	}
-
-	targetPath := filepath.Join(baseDir, reqPath)
-	targetPathAbs, err := filepath.Abs(targetPath)
-	if err != nil {
+	if err := os.MkdirAll(ctx.baseDir, 0755); err != nil {
 		return "", err
 	}
-
-	if !strings.HasPrefix(targetPathAbs, baseDirAbs) {
-		return "", errors.New("acceso denegado o path invalido")
-	}
-	return targetPathAbs, nil
+	return ctx.absPath, nil
 }
 
 func (s *server) removeUserRootIfEmpty(username string) {
@@ -580,15 +584,12 @@ func (s *server) createFile(req api.Request) api.Response {
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
-
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
-	}
+	path := ctx.absPath
+	dek := ctx.baseDEK
 
 	if parentPerm := s.requireParentDirWrite(req.Username, dek, req.Path); !parentPerm.Success {
 		return parentPerm
@@ -603,7 +604,7 @@ func (s *server) createFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al crear el fichero"}
 	}
 
-	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+	if err := s.storeFileTimestamp(ctx.storageUser, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: "Fichero creado, pero no se pudo guardar su timestamp"}
 	}
 
@@ -611,7 +612,7 @@ func (s *server) createFile(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: "Fichero creado, pero no se pudieron leer sus metadatos"}
 	}
-	if _, err := s.ensureFileMetadata(req.Username, dek, req.Path, info); err != nil {
+	if _, err := s.ensureFileMetadata(ctx.storageUser, dek, req.Path, info); err != nil {
 		return api.Response{Success: false, Message: "Fichero creado, pero no se pudieron guardar sus metadatos"}
 	}
 
@@ -625,20 +626,18 @@ func (s *server) deleteFile(req api.Request) api.Response {
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	path := ctx.absPath
 
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
 		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
 	}
 
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
-	}
+	dek := ctx.baseDEK
 
 	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'w'); !perm.Success {
 		return perm
@@ -647,9 +646,11 @@ func (s *server) deleteFile(req api.Request) api.Response {
 	if err := os.Remove(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar fichero"}
 	}
-	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(req.Username, req.Path))
-	_ = s.deleteFileMetadata(req.Username, dek, req.Path)
-	s.removeUserRootIfEmpty(req.Username)
+	_ = s.db.Delete(fileTimestampNamespace, fileTimestampKey(ctx.storageUser, req.Path))
+	_ = s.deleteFileMetadata(ctx.storageUser, dek, req.Path)
+	if !ctx.isShared {
+		s.removeUserRootIfEmpty(req.Username)
+	}
 
 	return api.Response{Success: true, Message: "Fichero borrado con exito"}
 }
@@ -671,12 +672,14 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "El fichero no existe o es un directorio"}
 	}
 
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
 	}
+	path = ctx.absPath
+	dek := ctx.baseDEK
 
-	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+	if err := s.checkFileTimestamp(ctx.storageUser, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
@@ -693,7 +696,7 @@ func (s *server) modifyFile(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al modificar el fichero"}
 	}
 
-	if err := s.storeFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+	if err := s.storeFileTimestamp(ctx.storageUser, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudo actualizar su timestamp"}
 	}
 
@@ -701,12 +704,12 @@ func (s *server) modifyFile(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron leer sus metadatos"}
 	}
-	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	meta, err := s.ensureFileMetadata(ctx.storageUser, dek, req.Path, info)
 	if err != nil {
 		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron recuperar sus metadatos"}
 	}
 	meta.ModifiedAt = time.Now().UTC()
-	if err := s.saveFileMetadata(req.Username, dek, meta); err != nil {
+	if err := s.saveFileMetadata(ctx.storageUser, dek, meta); err != nil {
 		return api.Response{Success: false, Message: "Fichero modificado, pero no se pudieron actualizar sus metadatos"}
 	}
 
@@ -720,22 +723,19 @@ func (s *server) readFile(req api.Request) api.Response {
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
-
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
-	}
+	path := ctx.absPath
+	dek := ctx.baseDEK
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al leer el fichero"}
 	}
 
-	if err := s.checkFileTimestamp(req.Username, req.Path, path, dek); err != nil {
+	if err := s.checkFileTimestamp(ctx.storageUser, req.Path, path, dek); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
 
@@ -754,9 +754,9 @@ func (s *server) readFile(req api.Request) api.Response {
 
 	info, err = os.Stat(path)
 	if err == nil {
-		if meta, metaErr := s.ensureFileMetadata(req.Username, dek, req.Path, info); metaErr == nil {
+		if meta, metaErr := s.ensureFileMetadata(ctx.storageUser, dek, req.Path, info); metaErr == nil {
 			meta.AccessedAt = time.Now().UTC()
-			_ = s.saveFileMetadata(req.Username, dek, meta)
+			_ = s.saveFileMetadata(ctx.storageUser, dek, meta)
 		}
 	}
 
@@ -773,15 +773,12 @@ func (s *server) createDir(req api.Request) api.Response {
 	if normalizedFilePath(req.Path) == "" {
 		return api.Response{Success: false, Message: "No se puede operar sobre la carpeta raiz del usuario"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
-
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
-	}
+	path := ctx.absPath
+	dek := ctx.baseDEK
 	if parentPerm := s.requireParentDirWrite(req.Username, dek, req.Path); !parentPerm.Success {
 		return parentPerm
 	}
@@ -794,8 +791,14 @@ func (s *server) createDir(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: "Directorio creado, pero no se pudieron leer sus metadatos"}
 	}
-	if _, err := s.ensureFileMetadata(req.Username, dek, req.Path, info); err != nil {
+	meta, err := s.ensureFileMetadata(ctx.storageUser, dek, req.Path, info)
+	if err != nil {
 		return api.Response{Success: false, Message: "Directorio creado, pero no se pudieron guardar sus metadatos"}
+	}
+	if normalizedFilePath(req.Path) == sharedFolderRoleName(ctx.storageUser) {
+		if err := s.ensureSharedFolderRole(ctx.storageUser, dek, &meta); err != nil {
+			return api.Response{Success: false, Message: "Directorio creado, pero no se pudo inicializar la compartida"}
+		}
 	}
 
 	return api.Response{Success: true, Message: "Directorio creado con exito"}
@@ -811,30 +814,38 @@ func (s *server) deleteDir(req api.Request) api.Response {
 	if normalizedFilePath(req.Path) == "" {
 		return api.Response{Success: false, Message: "No se puede operar sobre la carpeta raiz del usuario"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	if owner, ok := sharedFolderOwnerFromPath(req.Path); ok && normalizedFilePath(req.Path) == sharedFolderRoleName(owner) {
+		return api.Response{Success: false, Message: "No se puede borrar la carpeta compartida por defecto"}
+	}
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	path := ctx.absPath
 
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
 		return api.Response{Success: false, Message: "El directorio no existe o no es un directorio"}
 	}
 
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
+	dek := ctx.baseDEK
+	meta, err := s.ensureFileMetadata(ctx.storageUser, dek, req.Path, info)
+	if err != nil {
+		return api.Response{Success: false, Message: "No se pudieron leer los metadatos de la carpeta"}
 	}
 	if perm := s.requirePathPermission(req.Username, dek, req.Path, true, 'w'); !perm.Success {
 		return perm
 	}
-	_ = s.deleteFileMetadataTree(req.Username, dek, path)
-	_ = s.deleteFileTimestampsTree(req.Username, req.Path)
+	_ = s.deleteFileMetadataTree(ctx.storageUser, dek, path, ctx.baseDir)
+	_ = s.deleteFileTimestampsTree(ctx.storageUser, req.Path)
 
 	if err := os.RemoveAll(path); err != nil {
 		return api.Response{Success: false, Message: "Error al borrar directorio"}
 	}
-	s.removeUserRootIfEmpty(req.Username)
+	_ = s.cleanupSharedFolderRole(ctx.storageUser, &meta)
+	if !ctx.isShared {
+		s.removeUserRootIfEmpty(req.Username)
+	}
 
 	return api.Response{Success: true, Message: "Directorio borrado con exito"}
 }
@@ -844,15 +855,12 @@ func (s *server) listFiles(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Token invalido o sesion expirada"}
 	}
 
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
-
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion"}
-	}
+	path := ctx.absPath
+	dek := ctx.baseDEK
 	dirInfo, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -892,7 +900,7 @@ func (s *server) listFiles(req api.Request) api.Response {
 		if err != nil {
 			return api.Response{Success: false, Message: "Error al leer metadatos del listado"}
 		}
-		meta, err := s.ensureFileMetadata(req.Username, dek, childPath, info)
+		meta, err := s.ensureFileMetadata(ctx.storageUser, dek, childPath, info)
 		if err != nil {
 			return api.Response{Success: false, Message: "Error al preparar metadatos del listado"}
 		}
@@ -913,19 +921,16 @@ func (s *server) getFileMetadata(req api.Request) api.Response {
 	if req.Path == "" {
 		return api.Response{Success: false, Message: "Falta el path del fichero o directorio"}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	path := ctx.absPath
 	info, err := os.Stat(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "El fichero o directorio no existe"}
 	}
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
-	}
-	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, req.Path, info)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener metadatos"}
 	}
@@ -957,19 +962,16 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 			return api.Response{Success: false, Message: "El rol indicado no existe"}
 		}
 	}
-	path, err := s.safePath(req.Username, req.Path)
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	path := ctx.absPath
 	info, err := os.Stat(path)
 	if err != nil {
 		return api.Response{Success: false, Message: "El fichero o directorio no existe"}
 	}
-	dek, ok := s.getSessionKey(req.Username)
-	if !ok {
-		return api.Response{Success: false, Message: "Sesion inconsistente: vuelve a iniciar sesion", SessionExpired: true}
-	}
-	meta, err := s.ensureFileMetadata(req.Username, dek, req.Path, info)
+	meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, req.Path, info)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener metadatos"}
 	}
@@ -980,7 +982,7 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 		meta.Role = req.Role
 	}
 	meta.ModifiedAt = time.Now().UTC()
-	if err := s.saveFileMetadata(req.Username, dek, meta); err != nil {
+	if err := s.saveFileMetadata(ctx.storageUser, ctx.baseDEK, meta); err != nil {
 		return api.Response{Success: false, Message: "Error al actualizar metadatos"}
 	}
 	return api.Response{Success: true, Message: "Metadatos actualizados", FileMetadata: &meta}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,7 +235,10 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 		Username: "alice",
 		Token:    token,
 	})
-	if !r.Success || len(r.FileEntries) != 1 || r.FileEntries[0].Metadata == nil {
+	if !r.Success || len(r.FileEntries) != 1 {
+		t.Fatalf("listFiles no devolvio el elemento esperado: success=%v msg=%q entries=%+v", r.Success, r.Message, r.FileEntries)
+	}
+	if r.FileEntries[0].Metadata == nil {
 		t.Fatalf("listFiles no devolvio FileEntries con metadatos: success=%v msg=%q entries=%+v", r.Success, r.Message, r.FileEntries)
 	}
 
@@ -799,7 +803,10 @@ func TestServer_RootDirectoryRestrictionsAndEmptyCleanup(t *testing.T) {
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "data", "files", "alice")); !os.IsNotExist(err) {
-		t.Fatalf("la raiz vacia del usuario deberia borrarse, stat err=%v", err)
+		t.Fatalf("la raiz vacia del usuario deberia borrarse otra vez, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data", "files", "shared", "alice", "compartida_alice")); err != nil {
+		t.Fatalf("la carpeta compartida base deberia seguir existiendo en el sitio compartido, stat err=%v", err)
 	}
 }
 
@@ -876,6 +883,281 @@ func TestServer_FileMetadataDirectoryLifecycle(t *testing.T) {
 	})
 	if r.Success {
 		t.Fatal("getFileMetadata del hijo deberia fallar tras borrar el directorio")
+	}
+}
+
+func TestServer_SharedFolderMemberManagement(t *testing.T) {
+	ts, rs := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	for _, username := range []string{"alice", "bob"} {
+		_, r := postJSON(t, httpClient, apiURL, api.Request{
+			Action:           api.ActionRegister,
+			Username:         username,
+			Password:         "password123",
+			MessagePublicKey: newTestPublicKey(t),
+		})
+		if !r.Success {
+			t.Fatalf("register %q falló: %s", username, r.Message)
+		}
+	}
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login alice falló: %s", r.Message)
+	}
+	aliceToken := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice",
+	})
+	if !r.Success {
+		t.Fatalf("create shared folder falló: %s", r.Message)
+	}
+	if ok, err := rs.HasRole("alice", "compartida_alice"); err != nil {
+		t.Fatalf("alice debería tener el rol compartido por defecto: %v", err)
+	} else if !ok {
+		t.Fatal("alice debería figurar como miembro inicial de su carpeta compartida")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListSharedFolders,
+		Username: "alice",
+		Token:    aliceToken,
+	})
+	if !r.Success {
+		t.Fatalf("listSharedFolders para alice falló: %s", r.Message)
+	}
+	if !slices.Contains(r.SharedFolders, "compartida_alice") {
+		t.Fatalf("alice debería ver su carpeta compartida: %v", r.SharedFolders)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:     api.ActionSharedFolderAddMember,
+		Username:   "alice",
+		Token:      aliceToken,
+		Path:       "compartida_alice",
+		TargetUser: "bob",
+	})
+	if !r.Success {
+		t.Fatalf("sharedFolderAddMember falló: %s", r.Message)
+	}
+	if !slices.Contains(r.Roles, "bob") {
+		t.Fatalf("bob debería figurar como miembro de la compartida: %v", r.Roles)
+	}
+	if ok, err := rs.HasRole("bob", "compartida_alice"); err != nil || !ok {
+		t.Fatalf("bob debería tener el rol compartido: ok=%v err=%v", ok, err)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListSharedFolders,
+		Username: "bob",
+		Token:    aliceToken,
+	})
+	if r.Success {
+		t.Fatal("bob no debería poder listar carpetas compartidas con el token de alice")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "bob",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login bob falló: %s", r.Message)
+	}
+	bobToken := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListSharedFolders,
+		Username: "bob",
+		Token:    bobToken,
+	})
+	if !r.Success {
+		t.Fatalf("listSharedFolders para bob falló: %s", r.Message)
+	}
+	if !slices.Contains(r.SharedFolders, "compartida_alice") {
+		t.Fatalf("bob debería ver la carpeta compartida de alice: %v", r.SharedFolders)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionSharedFolderListMembers,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice",
+	})
+	if !r.Success {
+		t.Fatalf("sharedFolderListMembers falló: %s", r.Message)
+	}
+	if !slices.Contains(r.Roles, "bob") {
+		t.Fatalf("bob debería estar listado como miembro: %v", r.Roles)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:     api.ActionSharedFolderRemoveMember,
+		Username:   "alice",
+		Token:      aliceToken,
+		Path:       "compartida_alice",
+		TargetUser: "bob",
+	})
+	if !r.Success {
+		t.Fatalf("sharedFolderRemoveMember falló: %s", r.Message)
+	}
+	if slices.Contains(r.Roles, "bob") {
+		t.Fatalf("bob no debería seguir en la lista de miembros: %v", r.Roles)
+	}
+	if ok, err := rs.HasRole("bob", "compartida_alice"); err != nil {
+		t.Fatalf("HasRole tras eliminar falló: %v", err)
+	} else if ok {
+		t.Fatal("bob no debería conservar el rol compartido tras eliminarlo")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteDir,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice",
+	})
+	if r.Success {
+		t.Fatal("la carpeta compartida por defecto no debería poder borrarse")
+	}
+}
+
+func TestServer_UserGetsDefaultSharedFolderOnRegister(t *testing.T) {
+	ts, _ := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "carla",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register carla falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "carla",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login carla falló: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListSharedFolders,
+		Username: "carla",
+		Token:    r.Token,
+	})
+	if !r.Success {
+		t.Fatalf("listSharedFolders para carla falló: %s", r.Message)
+	}
+	if !slices.Contains(r.SharedFolders, "compartida_carla") {
+		t.Fatalf("carla debería ver su carpeta compartida por defecto: %v", r.SharedFolders)
+	}
+}
+
+func TestServer_SharedFolder_MemberCreateAndList(t *testing.T) {
+	ts, _ := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	// register and login owner and member
+	ownerToken := registerAndLogin(t, httpClient, apiURL, "pablo4", "password123")
+	memberToken := registerAndLogin(t, httpClient, apiURL, "pablo", "password123")
+
+	// owner creates the shared folder
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "pablo4",
+		Token:    ownerToken,
+		Path:     "compartida_pablo4",
+	})
+	if !r.Success {
+		t.Fatalf("create shared folder failed: %s", r.Message)
+	}
+
+	// owner adds member
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:     api.ActionSharedFolderAddMember,
+		Username:   "pablo4",
+		Token:      ownerToken,
+		Path:       "compartida_pablo4",
+		TargetUser: "pablo",
+	})
+	if !r.Success {
+		t.Fatalf("add member failed: %s", r.Message)
+	}
+
+	// member creates a directory inside the shared folder
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "pablo",
+		Token:    memberToken,
+		Path:     "compartida_pablo4/carpetaPrueva",
+	})
+	if !r.Success {
+		t.Fatalf("member create dir failed: %s", r.Message)
+	}
+
+	// fetch metadata for the created directory to inspect permissions
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "pablo",
+		Token:    memberToken,
+		Path:     "compartida_pablo4/carpetaPrueva",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("getFileMetadata for created dir failed: success=%v msg=%q", r.Success, r.Message)
+	}
+	if len(r.FileMetadata.Permissions) != 9 || r.FileMetadata.Permissions[3] != 'r' {
+		t.Fatalf("unexpected permissions on created dir: %q", r.FileMetadata.Permissions)
+	}
+
+	// member lists the shared root and should see the created directory
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "pablo",
+		Token:    memberToken,
+		Path:     "compartida_pablo4",
+	})
+	if !r.Success {
+		t.Fatalf("member list root failed: %s", r.Message)
+	}
+	found := false
+	for _, name := range r.Files {
+		if name == "carpetaPrueva/" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("created directory not found in listing: %v", r.Files)
+	}
+
+	// member lists the created directory itself (empty)
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "pablo",
+		Token:    memberToken,
+		Path:     "compartida_pablo4/carpetaPrueva",
+	})
+	if !r.Success {
+		t.Fatalf("member list created dir failed: %s", r.Message)
 	}
 }
 

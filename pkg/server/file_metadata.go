@@ -151,9 +151,22 @@ func (s *server) ensureFileMetadata(username string, dek []byte, path string, in
 	}
 
 	now := time.Now().UTC()
+	// Default permissions: owner-only. If the path belongs to a shared folder
+	// owned by `username`, grant group (role) access by default so members
+	// of the shared folder can access newly created entries.
 	permissions := "rw-------"
 	if info.IsDir() {
 		permissions = "rwx------"
+	}
+	if _, ok := sharedFolderOwnerFromPath(path); ok {
+		// For any path inside a shared folder, make directories and files
+		// group-accessible by default so members can access items created
+		// inside the shared area regardless of who created them.
+		if info.IsDir() {
+			permissions = "rwxrwx---"
+		} else {
+			permissions = "rw-rw----"
+		}
 	}
 	meta = mergeFileMetadata(path, api.FileMetadata{
 		Path:        normalizedFilePath(path),
@@ -163,6 +176,9 @@ func (s *server) ensureFileMetadata(username string, dek []byte, path string, in
 		ModifiedAt:  now,
 		Platform:    runtime.GOOS,
 	}, info)
+	if owner, ok := sharedFolderOwnerFromPath(path); ok {
+		meta.Role = sharedFolderRoleName(owner)
+	}
 	if err := s.saveFileMetadata(username, dek, meta); err != nil {
 		return api.FileMetadata{}, err
 	}
@@ -200,8 +216,7 @@ func (s *server) deleteRootFileMetadata(username string, dek []byte) error {
 	return nil
 }
 
-func (s *server) deleteFileMetadataTree(username string, dek []byte, rootAbsPath string) error {
-	baseDir := filepath.Join("data", "files", username)
+func (s *server) deleteFileMetadataTree(username string, dek []byte, rootAbsPath string, baseDir string) error {
 	baseDirAbs, err := filepath.Abs(baseDir)
 	if err != nil {
 		return err
@@ -332,23 +347,57 @@ func pathPrefixes(path string) []string {
 	return prefixes
 }
 
-func (s *server) loadPermissionTree(username string, dek []byte, path string, includeTarget bool) ([]api.FileMetadata, error) {
+func (s *server) loadPermissionTree(username string, _ []byte, path string, includeTarget bool) ([]api.FileMetadata, error) {
 	normalized := normalizedFilePath(path)
+	ctx, err := s.resolveFileAccessContext(username, normalized)
+	if err != nil {
+		return nil, err
+	}
+
+	if ctx.isShared {
+		rootInfo, err := os.Stat(sharedFolderRootAbsPath(ctx.owner))
+		if err != nil {
+			return nil, err
+		}
+		rootMeta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, ctx.rootPath, rootInfo)
+		if err != nil {
+			return nil, err
+		}
+		tree := []api.FileMetadata{rootMeta}
+		prefixes := pathPrefixes(normalized)
+		if len(prefixes) > 0 && prefixes[0] == ctx.rootPath {
+			prefixes = prefixes[1:]
+		}
+		if !includeTarget && len(prefixes) > 0 {
+			prefixes = prefixes[:len(prefixes)-1]
+		}
+		for _, prefix := range prefixes {
+			absPath := filepath.Join(ctx.baseDir, filepath.FromSlash(prefix))
+			info, err := os.Stat(absPath)
+			if err != nil {
+				return nil, err
+			}
+			meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, prefix, info)
+			if err != nil {
+				return nil, err
+			}
+			tree = append(tree, meta)
+		}
+		return tree, nil
+	}
+
 	tree := []api.FileMetadata{rootFileMetadata(username)}
 	prefixes := pathPrefixes(normalized)
 	if !includeTarget && len(prefixes) > 0 {
 		prefixes = prefixes[:len(prefixes)-1]
 	}
 	for _, prefix := range prefixes {
-		absPath, err := s.safePath(username, prefix)
-		if err != nil {
-			return nil, err
-		}
+		absPath := filepath.Join(ctx.baseDir, filepath.FromSlash(prefix))
 		info, err := os.Stat(absPath)
 		if err != nil {
 			return nil, err
 		}
-		meta, err := s.ensureFileMetadata(username, dek, prefix, info)
+		meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, prefix, info)
 		if err != nil {
 			return nil, err
 		}

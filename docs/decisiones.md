@@ -272,6 +272,17 @@ El rol indicado se valida con `RoleStore.RoleExists` antes de persistirse.
 No se permite modificar `Owner` porque el sistema todavía no implementa compartición real,
 transferencia de propiedad ni redistribución de claves entre usuarios.
 
+### Carpeta compartida con dueño único
+Se decidió implementar la compartición de forma simple: cada carpeta compartida tiene un único
+dueño y solo ese usuario puede añadir o quitar miembros.
+
+La pertenencia se modela con un rol por carpeta usando la convención `compartida_<owner>`.
+Así se reutiliza el sistema de roles existente sin introducir ACLs nuevas para cada fichero.
+
+No se cambió el almacenamiento físico ni el esquema criptográfico de los ficheros: cada usuario
+sigue teniendo su propio árbol y sus claves. Por eso esta primera versión documenta y gestiona
+miembros, pero no redefine todavía una carpeta física común para varios usuarios.
+
 Los permisos son lógicos de Sprout, no permisos reales del sistema operativo ni un mecanismo de
 compartición por sí mismos.
 Valores iniciales:
@@ -283,6 +294,33 @@ usar `-` para permisos desactivados. La primera tripleta aplica al propietario (
 a usuarios que tengan el rol/grupo asociado al metadato (`Role`) y la tercera a otros usuarios.
 
 No se permite modificar permisos de la carpeta raíz del usuario (`.` o ruta normalizada vacía).
+
+### Seguridad de carpetas compartidas
+Cada carpeta compartida tiene su propia clave de cifrado, guardada en la DB bajo el namespace
+`shared_folder_keys` y asociada al dueño. Así se evita reutilizar la DEK personal del usuario para
+contenido compartido.
+
+Las rutas compartidas se resuelven con `resolveFileAccessContext`, que distingue entre rutas
+personales y rutas que empiezan por `compartida_<owner>`. Si la ruta es compartida, el servidor:
+- comprueba que el usuario es el dueño o tiene el rol `compartida_<owner>`;
+- usa la clave compartida de esa carpeta para cifrar y descifrar contenido;
+- opera sobre `data/files/shared/<owner>/compartida_<owner>/...`;
+- guarda metadatos y timestamps usando el dueño como `storageUser`.
+
+Los elementos creados dentro de una compartida heredan permisos de grupo por defecto:
+- directorios: `rwxrwx---`
+- ficheros: `rw-rw----`
+
+Además, la metadata creada en compartidas guarda el `Role` `compartida_<owner>` para que la
+evaluación de permisos reconozca a los miembros como grupo autorizado. Sin ese campo, el sistema
+caería en la tripleta de "otros" y bloquearía el acceso aunque el usuario fuese miembro.
+
+El dueño es el único que puede administrar miembros. La interfaz de cliente no expone un acceso
+genérico a compartir cualquier carpeta: la gestión se limita a la compartida del usuario activo,
+que simplifica el modelo y reduce errores de autorización.
+
+No se permite borrar la carpeta compartida base del dueño. Esto protege la estructura raíz que
+ancla la clave compartida, la metadata y la pertenencia del grupo.
 
 ### Metadatos iniciales derivados del sistema y de la sesión
 Al crear ficheros o carpetas se generan metadatos iniciales:
