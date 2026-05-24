@@ -42,6 +42,7 @@ const (
 	// File metadata management actions
 	ActionGetFileMetadata    = "getFileMetadata"
 	ActionUpdateFileMetadata = "updateFileMetadata"
+	ActionFilterFilesByTag   = "filterFilesByTag"
 
 	// Role management
 	ActionAssignRole   = "assignRole"
@@ -59,23 +60,26 @@ const (
 )
 
 type Request struct {
-	Action           string `json:"action"`
-	Username         string `json:"username"`
-	Password         string `json:"password,omitempty"`
-	Token            string `json:"token,omitempty"`
-	Data             string `json:"data,omitempty"`
-	Path             string `json:"path,omitempty"`
-	Recipient        string `json:"recipient,omitempty"`
-	MessageID        string `json:"message_id,omitempty"`
-	Ciphertext       string `json:"ciphertext,omitempty"`
-	MessagePublicKey string `json:"message_public_key,omitempty"`
-	TOTPCode         string `json:"totp_code,omitempty"`
-	TempToken        string `json:"temp_token,omitempty"`
-	ForceNewSecret   bool   `json:"force_new_secret,omitempty"`
-	PublicKey        []byte `json:"public_key,omitempty"`
-	Signature        []byte `json:"signature,omitempty"`
-	Role             string `json:"role,omitempty"`
-	TargetUser       string `json:"target_user,omitempty"`
+	Action           string   `json:"action"`
+	Username         string   `json:"username"`
+	Password         string   `json:"password,omitempty"`
+	Token            string   `json:"token,omitempty"`
+	Data             string   `json:"data,omitempty"`
+	Path             string   `json:"path,omitempty"`
+	Tag              string   `json:"tag,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	ClearTags        bool     `json:"clear_tags,omitempty"`
+	Recipient        string   `json:"recipient,omitempty"`
+	MessageID        string   `json:"message_id,omitempty"`
+	Ciphertext       string   `json:"ciphertext,omitempty"`
+	MessagePublicKey string   `json:"message_public_key,omitempty"`
+	TOTPCode         string   `json:"totp_code,omitempty"`
+	TempToken        string   `json:"temp_token,omitempty"`
+	ForceNewSecret   bool     `json:"force_new_secret,omitempty"`
+	PublicKey        []byte   `json:"public_key,omitempty"`
+	Signature        []byte   `json:"signature,omitempty"`
+	Role             string   `json:"role,omitempty"`
+	TargetUser       string   `json:"target_user,omitempty"`
 }
 
 type MessageSummary struct {
@@ -92,6 +96,7 @@ type FileMetadata struct {
 	Size        int64     `json:"size"`
 	Owner       string    `json:"owner"`
 	Role        string    `json:"role,omitempty"`
+	Tags        []string  `json:"tags,omitempty"`
 	Permissions string    `json:"permissions"`
 	CreatedAt   time.Time `json:"created_at"`
 	ModifiedAt  time.Time `json:"modified_at"`

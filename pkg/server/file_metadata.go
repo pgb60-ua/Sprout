@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -243,10 +244,48 @@ func mergeFileMetadata(path string, meta api.FileMetadata, info os.FileInfo) api
 	if meta.Owner == "" {
 		meta.Owner = ""
 	}
+	meta.Tags = normalizeFileTags(meta.Tags)
 	if meta.Platform == "" {
 		meta.Platform = runtime.GOOS
 	}
 	return meta
+}
+
+func normalizeFileTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(tags))
+	normalized := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		normalized = append(normalized, tag)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	sort.Strings(normalized)
+	return normalized
+}
+
+func fileMetadataHasTag(meta api.FileMetadata, tag string) bool {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return false
+	}
+	for _, existing := range meta.Tags {
+		if existing == tag {
+			return true
+		}
+	}
+	return false
 }
 
 func validFilePermissions(permissions string) bool {

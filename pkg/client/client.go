@@ -587,6 +587,8 @@ func (c *client) fileManagerMenu() {
 			"Ver metadatos",
 			"Modificar permisos lógicos",
 			"Modificar rol/grupo",
+			"Modificar tags",
+			"Filtrar por tag",
 			"Ver mis carpetas compartidas",
 			"Gestionar carpeta compartida",
 			"Volver al menú principal",
@@ -772,7 +774,49 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 11: // Ver mis carpetas compartidas
+		case 11: // Modificar tags
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede modificar la carpeta raíz del usuario")
+				break
+			}
+			tags := parseTagList(ui.ReadInput("Introduce los tags separados por comas"))
+			req := api.Request{
+				Action:   api.ActionUpdateFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			}
+			if len(tags) == 0 {
+				req.ClearTags = true
+			} else {
+				req.Tags = tags
+			}
+			res := c.sendRequest(req)
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 12: // Filtrar por tag
+			path := ui.ReadInput("Introduce la carpeta raíz a filtrar (deja vacío para la raíz)")
+			tag := ui.ReadInput("Introduce el tag a buscar")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionFilterFilesByTag,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Tag:      tag,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && len(res.FileEntries) > 0 {
+				printTaggedEntriesTree(path, res.FileEntries)
+			}
+		case 13: // Ver mis carpetas compartidas
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionListSharedFolders,
 				Username: c.currentUser,
@@ -783,9 +827,9 @@ func (c *client) fileManagerMenu() {
 			if res.Success {
 				fmt.Println("Carpetas compartidas:", res.SharedFolders)
 			}
-		case 12: // Gestionar carpeta compartida
+		case 14: // Gestionar carpeta compartida
 			c.sharedFolderMenu("compartida_" + c.currentUser)
-		case 13: // Volver al menú principal
+		case 15: // Volver al menú principal
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
@@ -928,6 +972,32 @@ func printPermissionTree(tree []api.FileMetadata) {
 	fmt.Println("--------------------------")
 }
 
+func printTaggedEntriesTree(root string, entries []api.FileEntry) {
+	fmt.Println("--- Resultados del filtro por tag ---")
+	root = normalizeClientPath(root)
+	for _, entry := range entries {
+		meta := entry.Metadata
+		if meta == nil {
+			continue
+		}
+		relativePath := strings.TrimPrefix(meta.Path, root)
+		relativePath = strings.TrimPrefix(relativePath, "/")
+		depth := 0
+		if relativePath != "" {
+			depth = strings.Count(relativePath, "/")
+		}
+		indent := strings.Repeat("  ", depth)
+		path := meta.Path
+		if path == "" {
+			path = meta.Name + "/"
+		} else if meta.IsDir {
+			path += "/"
+		}
+		fmt.Printf("%s%s (%s)\n", indent, path, meta.Permissions)
+	}
+	fmt.Println("------------------------------------")
+}
+
 func hasClientPermissionThroughTree(tree []api.FileMetadata, permission byte) bool {
 	for _, meta := range tree {
 		if !hasClientLogicalPermission(meta, permission) {
@@ -1000,6 +1070,11 @@ func printFileMetadata(meta api.FileMetadata) {
 	if meta.Role != "" {
 		fmt.Println("Rol/grupo:", meta.Role)
 	}
+	if len(meta.Tags) > 0 {
+		fmt.Println("Tags:", strings.Join(meta.Tags, ", "))
+	} else {
+		fmt.Println("Tags: ninguno")
+	}
 	fmt.Println("Permisos:", meta.Permissions)
 	fmt.Println("Creado:", meta.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Modificado:", meta.ModifiedAt.Format(time.RFC3339))
@@ -1008,6 +1083,24 @@ func printFileMetadata(meta api.FileMetadata) {
 	}
 	fmt.Println("Plataforma:", meta.Platform)
 	fmt.Println("-----------------")
+}
+
+func parseTagList(input string) []string {
+	parts := strings.Split(input, ",")
+	tags := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		tag := strings.TrimSpace(part)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 func (c *client) manageTOTP() {

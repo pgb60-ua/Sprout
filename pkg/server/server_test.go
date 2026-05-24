@@ -168,6 +168,28 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 		Username: "alice",
 		Token:    token,
 		Path:     "nota.txt",
+		Tags:     []string{"proyecto", "urgente"},
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("updateFileMetadata de tags fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if !slices.Equal(r.FileMetadata.Tags, []string{"proyecto", "urgente"}) {
+		t.Fatalf("tags no actualizados: %+v", *r.FileMetadata)
+	}
+
+	dbBytes, err = os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer server.db tras tags: %v", err)
+	}
+	if strings.Contains(string(dbBytes), "proyecto") || strings.Contains(string(dbBytes), "urgente") {
+		t.Fatalf("los tags quedaron en claro en server.db")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
 		Role:     "rol-inexistente",
 	})
 	if r.Success {
@@ -243,6 +265,17 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 	}
 
 	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionFilterFilesByTag,
+		Username: "alice",
+		Token:    token,
+		Path:     "",
+		Tag:      "proyecto",
+	})
+	if !r.Success || len(r.FileEntries) != 1 {
+		t.Fatalf("filterFilesByTag no devolvio el elemento esperado: success=%v msg=%q entries=%+v", r.Success, r.Message, r.FileEntries)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
 		Action:   api.ActionDeleteFile,
 		Username: "alice",
 		Token:    token,
@@ -250,6 +283,17 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 	})
 	if !r.Success {
 		t.Fatalf("deleteFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionFilterFilesByTag,
+		Username: "alice",
+		Token:    token,
+		Path:     "",
+		Tag:      "proyecto",
+	})
+	if !r.Success {
+		t.Fatalf("filterFilesByTag fallo: %s", r.Message)
 	}
 
 	_, r = postJSON(t, httpClient, apiURL, api.Request{
