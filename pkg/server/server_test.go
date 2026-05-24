@@ -71,6 +71,858 @@ func newTestTLSServer(t *testing.T) (*httptest.Server, string, string) {
 	return ts, dir, dbPath
 }
 
+func TestServer_FileMetadataLifecycle(t *testing.T) {
+	ts, _, dbPath := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("getFileMetadata fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	meta := r.FileMetadata
+	if meta.Owner != "alice" || meta.Permissions != "rw-------" || meta.Name != "nota.txt" || meta.IsDir {
+		t.Fatalf("metadatos iniciales inesperados: %+v", *meta)
+	}
+	if meta.CreatedAt.IsZero() || meta.ModifiedAt.IsZero() || meta.Platform == "" || meta.Size == 0 {
+		t.Fatalf("metadatos incompletos: %+v", *meta)
+	}
+	initialModifiedAt := meta.ModifiedAt
+
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer server.db: %v", err)
+	}
+	if strings.Contains(string(dbBytes), "rw-------") || strings.Contains(string(dbBytes), `"permissions"`) {
+		t.Fatalf("los metadatos quedaron en claro en server.db")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "r--------",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("updateFileMetadata fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if r.FileMetadata.Permissions != "r--------" {
+		t.Fatalf("permisos no actualizados: %+v", *r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Role:     roles.DefaultRole,
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("updateFileMetadata de rol fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if r.FileMetadata.Role != roles.DefaultRole {
+		t.Fatalf("rol no actualizado: %+v", *r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Role:     "rol-inexistente",
+	})
+	if r.Success {
+		t.Fatal("updateFileMetadata deberia rechazar un rol inexistente")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "rw-------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata para restaurar permisos fallo: %s", r.Message)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionModifyFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido modificado",
+	})
+	if !r.Success {
+		t.Fatalf("modifyFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("getFileMetadata tras modificar fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if !r.FileMetadata.ModifiedAt.After(initialModifiedAt) {
+		t.Fatalf("ModifiedAt no se actualizo: antes=%s despues=%s", initialModifiedAt, r.FileMetadata.ModifiedAt)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionReadFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success {
+		t.Fatalf("readFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil || r.FileMetadata.AccessedAt.IsZero() {
+		t.Fatalf("AccessedAt no se actualizo: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+	})
+	if !r.Success || len(r.FileEntries) != 1 || r.FileEntries[0].Metadata == nil {
+		t.Fatalf("listFiles no devolvio FileEntries con metadatos: success=%v msg=%q entries=%+v", r.Success, r.Message, r.FileEntries)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success {
+		t.Fatalf("deleteFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if r.Success {
+		t.Fatal("getFileMetadata deberia fallar tras borrar el fichero")
+	}
+}
+
+func TestServer_FileMetadataRejectsInvalidTokenAndTraversal(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    "token-invalido",
+		Path:     "nota.txt",
+	})
+	if r.Success {
+		t.Fatal("getFileMetadata deberia fallar con token invalido")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    "token-invalido",
+		Path:     "nota.txt",
+		Data:     "rw-------",
+	})
+	if r.Success {
+		t.Fatal("updateFileMetadata deberia fallar con token invalido")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "../nota.txt",
+	})
+	if r.Success {
+		t.Fatal("getFileMetadata deberia rechazar path traversal")
+	}
+}
+
+func TestServer_FileLogicalPermissionsControlFileOperations(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "r--------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionReadFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.Data != "contenido" {
+		t.Fatalf("readFile deberia permitir r--------: success=%v msg=%q data=%q", r.Success, r.Message, r.Data)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionModifyFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "nuevo",
+	})
+	if r.Success {
+		t.Fatal("modifyFile deberia fallar sin permiso w")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if r.Success {
+		t.Fatal("deleteFile deberia fallar sin permiso w")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "-w-------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata para recuperar w fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionReadFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if r.Success {
+		t.Fatal("readFile deberia fallar sin permiso r")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionModifyFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "nuevo",
+	})
+	if !r.Success {
+		t.Fatalf("modifyFile deberia permitir -w-------: %s", r.Message)
+	}
+}
+
+func TestServer_FileLogicalPermissionsControlDirectoryOperations(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if !r.Success {
+		t.Fatalf("createDir fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+		Data:     "r-x------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs/nota.txt",
+		Data:     "contenido",
+	})
+	if r.Success {
+		t.Fatal("createFile deberia fallar sin permiso w en directorio padre")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if !r.Success {
+		t.Fatalf("listFiles deberia permitir r-x------: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+		Data:     "-wx------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata para recuperar w fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if r.Success {
+		t.Fatal("listFiles deberia fallar sin permiso r en directorio")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs/nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile deberia permitir -wx------: %s", r.Message)
+	}
+}
+
+func TestServer_FileLogicalPermissionsUseAncestorTree(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, dir := range []string{"c1", "c1/c2", "c1/c2/c3"} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:   api.ActionCreateDir,
+			Username: "alice",
+			Token:    token,
+			Path:     dir,
+		})
+		if !r.Success {
+			t.Fatalf("createDir(%s) fallo: %s", dir, r.Message)
+		}
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2",
+		Data:     "r--------",
+	})
+	if !r.Success {
+		t.Fatalf("update c2 fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+		Data:     "---------",
+	})
+	if !r.Success {
+		t.Fatalf("update c3 fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2",
+	})
+	if !r.Success {
+		t.Fatalf("c1/c2 deberia permitir leer por permisos efectivos: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/nota.txt",
+		Data:     "contenido",
+	})
+	if r.Success {
+		t.Fatal("c1/c2 no deberia permitir crear sin permiso w efectivo")
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+	})
+	if r.Success {
+		t.Fatal("c1/c2/c3 no deberia permitir leer por c3 sin permisos")
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("c1 deberia seguir permitiendo crear fuera de c2: %s", r.Message)
+	}
+}
+
+func TestServer_FileLogicalPermissionsAncestorRestrictsDescendants(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, dir := range []string{"c1", "c1/c2", "c1/c2/c3"} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:   api.ActionCreateDir,
+			Username: "alice",
+			Token:    token,
+			Path:     dir,
+		})
+		if !r.Success {
+			t.Fatalf("createDir(%s) fallo: %s", dir, r.Message)
+		}
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1",
+		Data:     "r--------",
+	})
+	if !r.Success {
+		t.Fatalf("update c1 fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFiles,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3",
+	})
+	if !r.Success {
+		t.Fatalf("c1/c2/c3 deberia permitir leer porque todos tienen r efectivo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "c1/c2/c3/nota.txt",
+		Data:     "contenido",
+	})
+	if r.Success {
+		t.Fatal("c1/c2/c3 no deberia permitir crear porque c1 no tiene w")
+	}
+}
+
+func TestServer_FileLogicalPermissionsSelectOwnerRoleAndOthers(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.NewStore("bbolt", filepath.Join(dir, "server.db"))
+	if err != nil {
+		t.Fatalf("no se ha podido crear la store: %v", err)
+	}
+	defer db.Close()
+
+	rs := roles.NewRoleStore(db)
+	if err := rs.CreateRole("reviewers"); err != nil {
+		t.Fatalf("CreateRole fallo: %v", err)
+	}
+	if err := rs.AssignRole("bob", "reviewers"); err != nil {
+		t.Fatalf("AssignRole fallo: %v", err)
+	}
+
+	srv := &server{roles: rs}
+	meta := api.FileMetadata{
+		Owner:       "alice",
+		Role:        "reviewers",
+		Permissions: "---r--r--",
+	}
+
+	if srv.hasLogicalPermissionForUser("alice", meta, 'r') {
+		t.Fatal("alice deberia usar la tripleta de propietario, no la de otros")
+	}
+	if !srv.hasLogicalPermissionForUser("bob", meta, 'r') {
+		t.Fatal("bob deberia recibir permiso r por su rol")
+	}
+	if !srv.hasLogicalPermissionForUser("charlie", meta, 'r') {
+		t.Fatal("charlie deberia recibir permiso r por la tripleta de otros")
+	}
+	if srv.hasLogicalPermissionForUser("bob", meta, 'w') {
+		t.Fatal("bob no deberia recibir permiso w por su rol")
+	}
+}
+
+func TestServer_RootDirectoryRestrictionsAndEmptyCleanup(t *testing.T) {
+	ts, dir, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	for _, req := range []api.Request{
+		{Action: api.ActionCreateDir, Path: "."},
+		{Action: api.ActionDeleteDir, Path: "."},
+		{Action: api.ActionUpdateFileMetadata, Path: ".", Data: "rwx------"},
+	} {
+		req.Username = "alice"
+		req.Token = token
+		_, r = postJSON(t, httpClient, apiURL, req)
+		if r.Success {
+			t.Fatalf("%s sobre raiz deberia fallar", req.Action)
+		}
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success {
+		t.Fatalf("deleteFile fallo: %s", r.Message)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "data", "files", "alice")); !os.IsNotExist(err) {
+		t.Fatalf("la raiz vacia del usuario deberia borrarse, stat err=%v", err)
+	}
+}
+
+func TestServer_FileMetadataDirectoryLifecycle(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if !r.Success {
+		t.Fatalf("createDir fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs/nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if !r.Success || r.FileMetadata == nil || !r.FileMetadata.IsDir || r.FileMetadata.Permissions != "rwx------" {
+		t.Fatalf("metadatos de directorio inesperados: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionDeleteDir,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs",
+	})
+	if !r.Success {
+		t.Fatalf("deleteDir fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "docs/nota.txt",
+	})
+	if r.Success {
+		t.Fatal("getFileMetadata del hijo deberia fallar tras borrar el directorio")
+	}
+}
+
+func TestServer_FileTimestampStillDetectsExternalModification(t *testing.T) {
+	ts, dir, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionRegister,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	path := filepath.Join(dir, "data", "files", "alice", "nota.txt")
+	time.Sleep(2 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("modificado fuera"), 0644); err != nil {
+		t.Fatalf("no se pudo modificar fichero fuera de Sprout: %v", err)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionReadFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if r.Success || !strings.Contains(strings.ToLower(r.Message), "modificado fuera") {
+		t.Fatalf("readFile deberia detectar modificacion externa: success=%v msg=%q", r.Success, r.Message)
+	}
+}
+
 func postJSON(t *testing.T, client *http.Client, url string, v any) (*http.Response, api.Response) {
 	t.Helper()
 

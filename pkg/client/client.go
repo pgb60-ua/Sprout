@@ -504,6 +504,9 @@ func (c *client) fileManagerMenu() {
 			"Visualizar fichero",
 			"Crear carpeta",
 			"Borrar carpeta",
+			"Ver metadatos",
+			"Modificar permisos lógicos",
+			"Modificar rol/grupo",
 			"Volver al menú principal",
 		}
 
@@ -511,6 +514,9 @@ func (c *client) fileManagerMenu() {
 		switch choice {
 		case 1: // Listar directorio
 			path := ui.ReadInput("Introduce el directorio a listar (deja vací­o para la raí­z)")
+			if !c.ensureLogicalPermission(path, true, 'r', "listar el directorio") {
+				break
+			}
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionListFiles,
 				Username: c.currentUser,
@@ -527,6 +533,9 @@ func (c *client) fileManagerMenu() {
 			}
 		case 2: // Crear fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del nuevo fichero")
+			if !c.ensureParentLogicalPermission(path, 'w', "crear el fichero") {
+				break
+			}
 			data := ui.ReadInput("Introduce el contenido del fichero")
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionCreateFile,
@@ -539,6 +548,9 @@ func (c *client) fileManagerMenu() {
 			fmt.Println("Mensaje:", res.Message)
 		case 3: // Borrar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a borrar")
+			if !c.ensureLogicalPermission(path, true, 'w', "borrar el fichero") {
+				break
+			}
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionDeleteFile,
 				Username: c.currentUser,
@@ -549,6 +561,9 @@ func (c *client) fileManagerMenu() {
 			fmt.Println("Mensaje:", res.Message)
 		case 4: // Modificar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a modificar")
+			if !c.ensureLogicalPermission(path, true, 'w', "modificar el fichero") {
+				break
+			}
 			data := ui.ReadMultiline("Introduce el nuevo contenido del fichero, el contenido actual se sobrescribirá.")
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionModifyFile,
@@ -562,6 +577,9 @@ func (c *client) fileManagerMenu() {
 			c.maybeOfferDeleteOutOfSyncFile(path, res)
 		case 5: // Visualizar fichero
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero a visualizar")
+			if !c.ensureLogicalPermission(path, true, 'r', "visualizar el fichero") {
+				break
+			}
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionReadFile,
 				Username: c.currentUser,
@@ -579,6 +597,14 @@ func (c *client) fileManagerMenu() {
 			}
 		case 6: // Crear carpeta
 			path := ui.ReadInput("Introduce la ruta/nombre de la nueva carpeta")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede operar sobre la carpeta raíz del usuario")
+				break
+			}
+			if !c.ensureParentLogicalPermission(path, 'w', "crear la carpeta") {
+				break
+			}
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionCreateDir,
 				Username: c.currentUser,
@@ -589,6 +615,14 @@ func (c *client) fileManagerMenu() {
 			fmt.Println("Mensaje:", res.Message)
 		case 7: // Borrar carpeta
 			path := ui.ReadInput("Introduce la ruta/nombre de la carpeta a borrar")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede operar sobre la carpeta raíz del usuario")
+				break
+			}
+			if !c.ensureLogicalPermission(path, true, 'w', "borrar la carpeta") {
+				break
+			}
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionDeleteDir,
 				Username: c.currentUser,
@@ -597,11 +631,231 @@ func (c *client) fileManagerMenu() {
 			})
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
-		case 8: // Volver al menú principal
+		case 8: // Ver metadatos
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionGetFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 9: // Modificar permisos lógicos
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede modificar la carpeta raíz del usuario")
+				break
+			}
+			permissions := ui.ReadInput("Introduce permisos en formato rwx------")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionUpdateFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Data:     permissions,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 10: // Modificar rol/grupo
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede modificar la carpeta raíz del usuario")
+				break
+			}
+			role := ui.ReadInput("Introduce el rol/grupo asociado")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionUpdateFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Role:     role,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 11: // Volver al menú principal
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
 	}
+}
+
+func (c *client) ensureLogicalPermission(path string, includeTarget bool, permission byte, operation string) bool {
+	tree, ok := c.loadClientPermissionTree(path, includeTarget)
+	if !ok {
+		return false
+	}
+	printPermissionTree(tree)
+	if !hasClientPermissionThroughTree(tree, permission) {
+		fmt.Println("Éxito: false")
+		fmt.Println("Mensaje: permiso denegado para " + operation)
+		return false
+	}
+	return true
+}
+
+func (c *client) ensureParentLogicalPermission(path string, permission byte, operation string) bool {
+	parent := parentClientPath(path)
+	tree, ok := c.loadClientPermissionTree(parent, true)
+	if !ok {
+		return false
+	}
+	printPermissionTree(tree)
+	if !hasClientPermissionThroughTree(tree, permission) {
+		fmt.Println("Éxito: false")
+		fmt.Println("Mensaje: permiso denegado para " + operation)
+		return false
+	}
+	return true
+}
+
+func (c *client) loadClientPermissionTree(path string, includeTarget bool) ([]api.FileMetadata, bool) {
+	tree := []api.FileMetadata{{
+		Path:        "",
+		Name:        c.currentUser,
+		IsDir:       true,
+		Owner:       c.currentUser,
+		Permissions: "rwx------",
+	}}
+	prefixes := clientPathPrefixes(path)
+	if !includeTarget && len(prefixes) > 0 {
+		prefixes = prefixes[:len(prefixes)-1]
+	}
+	for _, prefix := range prefixes {
+		res := c.sendRequest(api.Request{
+			Action:   api.ActionGetFileMetadata,
+			Username: c.currentUser,
+			Token:    c.authToken,
+			Path:     prefix,
+		})
+		if !res.Success {
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			c.maybeOfferDeleteOutOfSyncFile(prefix, res)
+			return nil, false
+		}
+		if res.FileMetadata == nil {
+			fmt.Println("Éxito: false")
+			fmt.Println("Mensaje: respuesta sin metadatos")
+			return nil, false
+		}
+		tree = append(tree, *res.FileMetadata)
+	}
+	return tree, true
+}
+
+func printPermissionTree(tree []api.FileMetadata) {
+	fmt.Println("--- Permisos efectivos ---")
+	for i, meta := range tree {
+		indent := strings.Repeat("  ", i)
+		path := meta.Path
+		if path == "" {
+			path = meta.Name + "/"
+		} else if meta.IsDir {
+			path += "/"
+		}
+		fmt.Printf("%s%s (%s)\n", indent, path, meta.Permissions)
+	}
+	fmt.Println("--------------------------")
+}
+
+func hasClientPermissionThroughTree(tree []api.FileMetadata, permission byte) bool {
+	for _, meta := range tree {
+		if !hasClientLogicalPermission(meta, permission) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasClientLogicalPermission(meta api.FileMetadata, permission byte) bool {
+	if len(meta.Permissions) < 3 {
+		return false
+	}
+	switch permission {
+	case 'r':
+		return meta.Permissions[0] == 'r'
+	case 'w':
+		return meta.Permissions[1] == 'w'
+	case 'x':
+		return meta.Permissions[2] == 'x'
+	default:
+		return false
+	}
+}
+
+func clientPathPrefixes(path string) []string {
+	normalized := normalizeClientPath(path)
+	if normalized == "" {
+		return nil
+	}
+	parts := strings.Split(normalized, "/")
+	prefixes := make([]string, 0, len(parts))
+	for i := range parts {
+		prefixes = append(prefixes, strings.Join(parts[:i+1], "/"))
+	}
+	return prefixes
+}
+
+func parentClientPath(path string) string {
+	normalized := normalizeClientPath(path)
+	if normalized == "" || !strings.Contains(normalized, "/") {
+		return ""
+	}
+	return normalized[:strings.LastIndex(normalized, "/")]
+}
+
+func normalizeClientPath(path string) string {
+	normalized := strings.Trim(strings.ReplaceAll(strings.TrimSpace(path), "\\", "/"), "/")
+	if normalized == "." {
+		return ""
+	}
+	return normalized
+}
+
+func isClientRootPath(path string) bool {
+	return normalizeClientPath(path) == ""
+}
+
+func printFileMetadata(meta api.FileMetadata) {
+	itemType := "fichero"
+	if meta.IsDir {
+		itemType = "directorio"
+	}
+	fmt.Println("--- Metadatos ---")
+	fmt.Println("Ruta:", meta.Path)
+	fmt.Println("Nombre:", meta.Name)
+	fmt.Println("Tipo:", itemType)
+	fmt.Println("Tamaño:", meta.Size)
+	fmt.Println("Propietario:", meta.Owner)
+	if meta.Role != "" {
+		fmt.Println("Rol/grupo:", meta.Role)
+	}
+	fmt.Println("Permisos:", meta.Permissions)
+	fmt.Println("Creado:", meta.CreatedAt.Format(time.RFC3339))
+	fmt.Println("Modificado:", meta.ModifiedAt.Format(time.RFC3339))
+	if !meta.AccessedAt.IsZero() {
+		fmt.Println("Accedido:", meta.AccessedAt.Format(time.RFC3339))
+	}
+	fmt.Println("Plataforma:", meta.Platform)
+	fmt.Println("-----------------")
 }
 
 func (c *client) manageTOTP() {
