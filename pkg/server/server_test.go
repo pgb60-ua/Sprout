@@ -78,9 +78,10 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -265,9 +266,10 @@ func TestServer_FileMetadataRejectsInvalidTokenAndTraversal(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -332,9 +334,10 @@ func TestServer_FileLogicalPermissionsControlFileOperations(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -442,9 +445,10 @@ func TestServer_FileLogicalPermissionsControlDirectoryOperations(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -541,9 +545,10 @@ func TestServer_FileLogicalPermissionsUseAncestorTree(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -637,9 +642,10 @@ func TestServer_FileLogicalPermissionsAncestorRestrictsDescendants(t *testing.T)
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -741,9 +747,10 @@ func TestServer_RootDirectoryRestrictionsAndEmptyCleanup(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -803,9 +810,10 @@ func TestServer_FileMetadataDirectoryLifecycle(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
@@ -878,9 +886,10 @@ func TestServer_FileTimestampStillDetectsExternalModification(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register fallo: %s", r.Message)
