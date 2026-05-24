@@ -908,8 +908,20 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	if normalizedFilePath(req.Path) == "" {
 		return api.Response{Success: false, Message: "No se puede modificar la carpeta raiz del usuario"}
 	}
-	if !validFilePermissions(req.Data) {
+	if req.Data == "" && req.Role == "" {
+		return api.Response{Success: false, Message: "No hay cambios de metadatos"}
+	}
+	if req.Data != "" && !validFilePermissions(req.Data) {
 		return api.Response{Success: false, Message: "Permisos invalidos: usa formato rwx------"}
+	}
+	if req.Role != "" {
+		exists, err := s.roles.RoleExists(req.Role)
+		if err != nil {
+			return api.Response{Success: false, Message: "Error al comprobar rol"}
+		}
+		if !exists {
+			return api.Response{Success: false, Message: "El rol indicado no existe"}
+		}
 	}
 	path, err := s.safePath(req.Username, req.Path)
 	if err != nil {
@@ -927,7 +939,12 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener metadatos"}
 	}
-	meta.Permissions = req.Data
+	if req.Data != "" {
+		meta.Permissions = req.Data
+	}
+	if req.Role != "" {
+		meta.Role = req.Role
+	}
 	meta.ModifiedAt = time.Now().UTC()
 	if err := s.saveFileMetadata(req.Username, dek, meta); err != nil {
 		return api.Response{Success: false, Message: "Error al actualizar metadatos"}

@@ -152,6 +152,31 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 		Username: "alice",
 		Token:    token,
 		Path:     "nota.txt",
+		Role:     roles.DefaultRole,
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("updateFileMetadata de rol fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if r.FileMetadata.Role != roles.DefaultRole {
+		t.Fatalf("rol no actualizado: %+v", *r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Role:     "rol-inexistente",
+	})
+	if r.Success {
+		t.Fatal("updateFileMetadata deberia rechazar un rol inexistente")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
 		Data:     "rw-------",
 	})
 	if !r.Success {
@@ -669,6 +694,43 @@ func TestServer_FileLogicalPermissionsAncestorRestrictsDescendants(t *testing.T)
 	})
 	if r.Success {
 		t.Fatal("c1/c2/c3 no deberia permitir crear porque c1 no tiene w")
+	}
+}
+
+func TestServer_FileLogicalPermissionsSelectOwnerRoleAndOthers(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.NewStore("bbolt", filepath.Join(dir, "server.db"))
+	if err != nil {
+		t.Fatalf("no se ha podido crear la store: %v", err)
+	}
+	defer db.Close()
+
+	rs := roles.NewRoleStore(db)
+	if err := rs.CreateRole("reviewers"); err != nil {
+		t.Fatalf("CreateRole fallo: %v", err)
+	}
+	if err := rs.AssignRole("bob", "reviewers"); err != nil {
+		t.Fatalf("AssignRole fallo: %v", err)
+	}
+
+	srv := &server{roles: rs}
+	meta := api.FileMetadata{
+		Owner:       "alice",
+		Role:        "reviewers",
+		Permissions: "---r--r--",
+	}
+
+	if srv.hasLogicalPermissionForUser("alice", meta, 'r') {
+		t.Fatal("alice deberia usar la tripleta de propietario, no la de otros")
+	}
+	if !srv.hasLogicalPermissionForUser("bob", meta, 'r') {
+		t.Fatal("bob deberia recibir permiso r por su rol")
+	}
+	if !srv.hasLogicalPermissionForUser("charlie", meta, 'r') {
+		t.Fatal("charlie deberia recibir permiso r por la tripleta de otros")
+	}
+	if srv.hasLogicalPermissionForUser("bob", meta, 'w') {
+		t.Fatal("bob no deberia recibir permiso w por su rol")
 	}
 }
 

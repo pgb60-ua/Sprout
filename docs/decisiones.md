@@ -263,19 +263,24 @@ La carpeta raíz lógica del usuario se trata como metadato virtual:
 - no se persiste en `file_metadata`;
 - se usa para calcular permisos efectivos en rutas hijas.
 
-### Solo se modifican permisos lógicos desde la API
-En esta fase `updateFileMetadata` solo permite cambiar `Permissions`, recibido en `Request.Data`.
+### Permisos lógicos y rol/grupo asociado desde la API
+En esta fase `updateFileMetadata` permite cambiar `Permissions`, recibido en `Request.Data`,
+o asociar un rol/grupo mediante `Request.Role`.
+El cliente separa ambas operaciones en opciones distintas para no mezclar la edición de permisos
+lógicos con la asignación del grupo.
+El rol indicado se valida con `RoleStore.RoleExists` antes de persistirse.
 No se permite modificar `Owner` porque el sistema todavía no implementa compartición real,
 transferencia de propiedad ni redistribución de claves entre usuarios.
 
-Los permisos son lógicos de Sprout, no permisos reales del sistema operativo.
+Los permisos son lógicos de Sprout, no permisos reales del sistema operativo ni un mecanismo de
+compartición por sí mismos.
 Valores iniciales:
 - ficheros: `rw-------`
 - carpetas: `rwx------`
 
 El formato aceptado tiene 9 caracteres y cada tripleta debe respetar el orden `rwx`, permitiendo
-usar `-` para permisos desactivados. Aunque se guarda el string completo, la comprobación efectiva
-actual usa la primera tripleta.
+usar `-` para permisos desactivados. La primera tripleta aplica al propietario (`Owner`), la segunda
+a usuarios que tengan el rol/grupo asociado al metadato (`Role`) y la tercera a otros usuarios.
 
 No se permite modificar permisos de la carpeta raíz del usuario (`.` o ruta normalizada vacía).
 
@@ -295,6 +300,14 @@ con `safePath`.
 Los permisos no son solo informativos: el servidor los consulta antes de ejecutar operaciones.
 La comprobación se hace sobre el árbol de ancestros, empezando por la raíz virtual del usuario.
 Si cualquier elemento del camino no concede el permiso requerido, la operación se rechaza.
+Para cada elemento del árbol, el servidor elige la tripleta efectiva así:
+- si el usuario autenticado es `Owner`, usa la primera tripleta;
+- si no es propietario pero tiene el rol guardado en `Role`, usa la segunda tripleta;
+- en el resto de casos, usa la tercera tripleta.
+
+Esta autorización solo decide si una operación debería permitirse lógicamente. No implementa por sí
+misma descubrimiento de ficheros ajenos, rutas compartidas, ficheros públicos ni redistribución de
+claves para descifrar contenido; esas responsabilidades pertenecen a la funcionalidad de compartición.
 
 Reglas aplicadas:
 - `readFile` requiere permiso `r` en todos los ancestros y en el fichero.

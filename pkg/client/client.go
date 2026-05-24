@@ -506,6 +506,7 @@ func (c *client) fileManagerMenu() {
 			"Borrar carpeta",
 			"Ver metadatos",
 			"Modificar permisos lógicos",
+			"Modificar rol/grupo",
 			"Volver al menú principal",
 		}
 
@@ -667,7 +668,29 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 10: // Volver al menú principal
+		case 10: // Modificar rol/grupo
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if isClientRootPath(path) {
+				fmt.Println("Éxito: false")
+				fmt.Println("Mensaje: no se puede modificar la carpeta raíz del usuario")
+				break
+			}
+			role := ui.ReadInput("Introduce el rol/grupo asociado")
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionUpdateFileMetadata,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+				Role:     role,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileMetadata(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 11: // Volver al menú principal
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
@@ -822,6 +845,9 @@ func printFileMetadata(meta api.FileMetadata) {
 	fmt.Println("Tipo:", itemType)
 	fmt.Println("Tamaño:", meta.Size)
 	fmt.Println("Propietario:", meta.Owner)
+	if meta.Role != "" {
+		fmt.Println("Rol/grupo:", meta.Role)
+	}
 	fmt.Println("Permisos:", meta.Permissions)
 	fmt.Println("Creado:", meta.CreatedAt.Format(time.RFC3339))
 	fmt.Println("Modificado:", meta.ModifiedAt.Format(time.RFC3339))

@@ -264,19 +264,36 @@ func validFilePermissions(permissions string) bool {
 }
 
 func hasLogicalPermission(meta api.FileMetadata, permission byte) bool {
-	if len(meta.Permissions) < 3 {
+	return hasPermissionAt(meta.Permissions, 0, permission)
+}
+
+func hasPermissionAt(permissions string, offset int, permission byte) bool {
+	if len(permissions) != 9 || offset < 0 || offset+2 >= len(permissions) {
 		return false
 	}
 	switch permission {
 	case 'r':
-		return meta.Permissions[0] == 'r'
+		return permissions[offset] == 'r'
 	case 'w':
-		return meta.Permissions[1] == 'w'
+		return permissions[offset+1] == 'w'
 	case 'x':
-		return meta.Permissions[2] == 'x'
+		return permissions[offset+2] == 'x'
 	default:
 		return false
 	}
+}
+
+func (s *server) hasLogicalPermissionForUser(username string, meta api.FileMetadata, permission byte) bool {
+	offset := 6
+	if username == meta.Owner {
+		offset = 0
+	} else if meta.Role != "" {
+		ok, err := s.roles.HasRole(username, meta.Role)
+		if err == nil && ok {
+			offset = 3
+		}
+	}
+	return hasPermissionAt(meta.Permissions, offset, permission)
 }
 
 func parentFilePath(path string) string {
@@ -340,9 +357,9 @@ func (s *server) loadPermissionTree(username string, dek []byte, path string, in
 	return tree, nil
 }
 
-func hasPermissionThroughTree(tree []api.FileMetadata, permission byte) bool {
+func (s *server) hasPermissionThroughTree(username string, tree []api.FileMetadata, permission byte) bool {
 	for _, meta := range tree {
-		if !hasLogicalPermission(meta, permission) {
+		if !s.hasLogicalPermissionForUser(username, meta, permission) {
 			return false
 		}
 	}
@@ -354,7 +371,7 @@ func (s *server) requirePathPermission(username string, dek []byte, path string,
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener permisos del arbol"}
 	}
-	if !hasPermissionThroughTree(tree, permission) {
+	if !s.hasPermissionThroughTree(username, tree, permission) {
 		return api.Response{Success: false, Message: "Permiso denegado"}
 	}
 	return api.Response{Success: true}
@@ -365,7 +382,7 @@ func (s *server) requireFilePermission(username string, dek []byte, path string,
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener metadatos"}
 	}
-	if !hasLogicalPermission(meta, permission) {
+	if !s.hasLogicalPermissionForUser(username, meta, permission) {
 		return api.Response{Success: false, Message: "Permiso denegado"}
 	}
 	return api.Response{Success: true, FileMetadata: &meta}

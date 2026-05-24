@@ -67,6 +67,7 @@ type FileMetadata struct {
 	IsDir       bool      `json:"is_dir"`
 	Size        int64     `json:"size"`
 	Owner       string    `json:"owner"`
+	Role        string    `json:"role,omitempty"`
 	Permissions string    `json:"permissions"`
 	CreatedAt   time.Time `json:"created_at"`
 	ModifiedAt  time.Time `json:"modified_at"`
