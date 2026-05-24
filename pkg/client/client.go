@@ -782,13 +782,18 @@ func (c *client) fileManagerMenu() {
 				break
 			}
 			tags := parseTagList(ui.ReadInput("Introduce los tags separados por comas"))
-			res := c.sendRequest(api.Request{
+			req := api.Request{
 				Action:   api.ActionUpdateFileMetadata,
 				Username: c.currentUser,
 				Token:    c.authToken,
 				Path:     path,
-				Tags:     tags,
-			})
+			}
+			if len(tags) == 0 {
+				req.ClearTags = true
+			} else {
+				req.Tags = tags
+			}
+			res := c.sendRequest(req)
 			fmt.Println("Éxito:", res.Success)
 			fmt.Println("Mensaje:", res.Message)
 			if res.Success && res.FileMetadata != nil {
@@ -797,7 +802,7 @@ func (c *client) fileManagerMenu() {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
 		case 12: // Filtrar por tag
-			path := ui.ReadInput("Introduce la carpeta raíz a filtrar (deja vací­o para la raíz)")
+			path := ui.ReadInput("Introduce la carpeta raíz a filtrar (deja vacío para la raíz)")
 			tag := ui.ReadInput("Introduce el tag a buscar")
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionFilterFilesByTag,

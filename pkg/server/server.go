@@ -1050,6 +1050,14 @@ func (s *server) filterFilesByTag(req api.Request) api.Response {
 		if rel == "." {
 			rel = ""
 		}
+
+		if perm := s.requirePathPermission(req.Username, ctx.baseDEK, rel, true, 'r'); !perm.Success {
+			if currentInfo.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		meta, err := s.loadFileMetadata(ctx.storageUser, ctx.baseDEK, rel, currentInfo)
 		if err != nil {
 			if errors.Is(err, store.ErrKeyNotFound) || errors.Is(err, store.ErrNamespaceNotFound) {
@@ -1123,7 +1131,7 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	if normalizedFilePath(req.Path) == "" {
 		return api.Response{Success: false, Message: "No se puede modificar la carpeta raiz del usuario"}
 	}
-	if req.Data == "" && req.Role == "" && req.Tags == nil {
+	if req.Data == "" && req.Role == "" && req.Tags == nil && !req.ClearTags {
 		return api.Response{Success: false, Message: "No hay cambios de metadatos"}
 	}
 	if req.Data != "" && !validFilePermissions(req.Data) {
@@ -1142,6 +1150,7 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	if err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+
 	path := ctx.absPath
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1159,6 +1168,8 @@ func (s *server) updateFileMetadata(req api.Request) api.Response {
 	}
 	if req.Tags != nil {
 		meta.Tags = normalizeFileTags(req.Tags)
+	} else if req.ClearTags {
+		meta.Tags = nil
 	}
 	meta.ModifiedAt = time.Now().UTC()
 	if err := s.saveFileMetadata(ctx.storageUser, ctx.baseDEK, meta); err != nil {
