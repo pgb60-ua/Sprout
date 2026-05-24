@@ -171,6 +171,17 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.updateData(req)
 	case api.ActionLogout:
 		res = s.logoutUser(req)
+	// MESSAGES
+	case api.ActionGetPublicKey:
+		res = s.getPublicKey(req)
+	case api.ActionSendMessage:
+		res = s.sendMessage(req)
+	case api.ActionListMessages:
+		res = s.listMessages(req)
+	case api.ActionReadMessage:
+		res = s.readMessage(req)
+	case api.ActionListSentMessages:
+		res = s.listSentMessages(req)
 	// FILES
 	case api.ActionCreateFile:
 		res = s.createFile(req)
@@ -243,6 +254,12 @@ func (s *server) registerUser(req api.Request) api.Response {
 	if err := utils.ValidatePassword(req.Password); err != nil {
 		return api.Response{Success: false, Message: err.Error()}
 	}
+	if req.MessagePublicKey == "" {
+		return api.Response{Success: false, Message: "Falta clave publica de mensajes"}
+	}
+	if _, err := utils.DecodeMessagePublicKey(req.MessagePublicKey); err != nil {
+		return api.Response{Success: false, Message: "Clave publica de mensajes invalida"}
+	}
 
 	exists, err := s.userExists(req.Username)
 	if err != nil {
@@ -267,28 +284,45 @@ func (s *server) registerUser(req api.Request) api.Response {
 		return api.Response{Success: false, Message: "Error al serializar cifrado del usuario"}
 	}
 
-	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
-		return api.Response{Success: false, Message: "Error al guardar credenciales"}
-	}
-
-	if err := s.db.Put(cryptoNamespace, []byte(req.Username), cryptoMetaBytes); err != nil {
-		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
-	}
-
 	encryptedUserdata, err := encryptUserdata(dek, []byte(""))
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al cifrar datos iniciales del usuario"}
 	}
 
+	if err := s.db.Put("auth", []byte(req.Username), []byte(hash)); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar credenciales"}
+	}
+
+	if err := s.db.Put(cryptoNamespace, []byte(req.Username), cryptoMetaBytes); err != nil {
+		s.rollbackUserRegistration(req.Username, "auth")
+		return api.Response{Success: false, Message: "Error al guardar metadatos criptograficos"}
+	}
+
 	if err := s.db.Put("userdata", []byte(req.Username), encryptedUserdata); err != nil {
+		s.rollbackUserRegistration(req.Username, cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al inicializar datos de usuario"}
 	}
 
+	if err := s.db.Put(publicKeysNamespace, []byte(req.Username), []byte(req.MessagePublicKey)); err != nil {
+		s.rollbackUserRegistration(req.Username, "userdata", cryptoNamespace, "auth")
+		return api.Response{Success: false, Message: "Error al guardar clave publica de mensajes"}
+	}
+
 	if err := s.roles.AssignRole(req.Username, roles.DefaultRole); err != nil {
+		s.rollbackUserRegistration(req.Username, publicKeysNamespace, "userdata", cryptoNamespace, "auth")
 		return api.Response{Success: false, Message: "Error al asignar rol por defecto"}
 	}
 
 	return api.Response{Success: true, Message: "Usuario registrado"}
+}
+
+func (s *server) rollbackUserRegistration(username string, namespaces ...string) {
+	key := []byte(username)
+	for _, namespace := range namespaces {
+		if err := s.db.Delete(namespace, key); err != nil && s.log != nil {
+			s.log.Printf("No se pudo revertir registro parcial de %q en %q: %v", username, namespace, err)
+		}
+	}
 }
 
 // loginUser valida credenciales y desbloquea la clave en memoria.

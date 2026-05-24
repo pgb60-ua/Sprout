@@ -73,9 +73,10 @@ func registerAndLogin(t *testing.T, client *http.Client, apiURL, username, passw
 	t.Helper()
 
 	_, r := postJSON(t, client, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: username,
-		Password: password,
+		Action:           api.ActionRegister,
+		Username:         username,
+		Password:         password,
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register %q falló: %s", username, r.Message)
@@ -99,9 +100,10 @@ func TestServer_RegisterAssignsDefaultRole(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register falló: %s", r.Message)
@@ -123,9 +125,10 @@ func TestServer_LoginIsAdminFalse(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register falló: %s", r.Message)
@@ -151,9 +154,10 @@ func TestServer_LoginIsAdminTrue(t *testing.T) {
 	httpClient.Timeout = 2 * time.Second
 
 	_, r := postJSON(t, httpClient, apiURL, api.Request{
-		Action:   api.ActionRegister,
-		Username: "alice",
-		Password: "password123",
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
 	})
 	if !r.Success {
 		t.Fatalf("register falló: %s", r.Message)
@@ -263,12 +267,12 @@ func TestServer_RoleManagement_EmptyFieldsRejected(t *testing.T) {
 		action string
 		req    api.Request
 	}{
-		{api.ActionAssignRole, api.Request{Role: "moderator"}},          // TargetUser vacío
-		{api.ActionAssignRole, api.Request{TargetUser: "bob"}},          // Role vacío
-		{api.ActionRemoveRole, api.Request{Role: "moderator"}},          // TargetUser vacío
-		{api.ActionRemoveRole, api.Request{TargetUser: "bob"}},          // Role vacío
-		{api.ActionCreateRole, api.Request{}},                           // Role vacío
-		{api.ActionDeleteRole, api.Request{}},                           // Role vacío
+		{api.ActionAssignRole, api.Request{Role: "moderator"}}, // TargetUser vacío
+		{api.ActionAssignRole, api.Request{TargetUser: "bob"}}, // Role vacío
+		{api.ActionRemoveRole, api.Request{Role: "moderator"}}, // TargetUser vacío
+		{api.ActionRemoveRole, api.Request{TargetUser: "bob"}}, // Role vacío
+		{api.ActionCreateRole, api.Request{}},                  // Role vacío
+		{api.ActionDeleteRole, api.Request{}},                  // Role vacío
 	}
 
 	for _, tc := range cases {

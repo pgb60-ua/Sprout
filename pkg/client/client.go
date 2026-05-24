@@ -32,6 +32,7 @@ type client struct {
 	authToken      string
 	totpEnabled    bool // Para saber si tiene el totp enabled y cambiar el texto y opciones
 	keyAuthEnabled bool // Para saber si tiene la firma publica - privada enabled y cambiar el texto y opciones
+	messageKey     []byte
 	httpClient     *http.Client
 	apiEndpoint    string
 	isAdmin        bool
@@ -96,6 +97,7 @@ func (c *client) runLoop() {
 				"Ver datos",
 				"Actualizar datos",
 				totpOption,
+				"Mensajes",
 				keyOption,
 				"Gestión de ficheros",
 			}
@@ -131,16 +133,18 @@ func (c *client) runLoop() {
 			case 3:
 				c.manageTOTP()
 			case 4:
-				c.manageKey()
+				c.messageMenu()
 			case 5:
-				c.fileManagerMenu()
+				c.manageKey()
 			case 6:
+				c.fileManagerMenu()
+			case 7:
 				if c.isAdmin {
 					c.adminMenu()
 				} else {
 					c.logoutUser()
 				}
-			case 7:
+			case 8:
 				if c.isAdmin {
 					c.logoutUser()
 				} else {
@@ -148,7 +152,7 @@ func (c *client) runLoop() {
 					c.log.Println("Saliendo del cliente...")
 					return
 				}
-			case 8:
+			case 9:
 				if c.isAdmin {
 					// Opción Salir
 					c.log.Println("Saliendo del cliente...")
@@ -176,11 +180,23 @@ func (c *client) registerUser() {
 		return
 	}
 
+	publicKey, privateKey, err := utils.GenerateMessageKeyPair()
+	if err != nil {
+		c.log.Println("No se han podido generar claves de mensajes:", err)
+		return
+	}
+	encodedPublicKey, err := utils.EncodeMessagePublicKey(publicKey)
+	if err != nil {
+		c.log.Println("No se ha podido codificar la clave publica de mensajes:", err)
+		return
+	}
+
 	// Enviamos la acción al servidor
 	res := c.sendRequest(api.Request{
-		Action:   api.ActionRegister,
-		Username: username,
-		Password: password,
+		Action:           api.ActionRegister,
+		Username:         username,
+		Password:         password,
+		MessagePublicKey: encodedPublicKey,
 	})
 
 	// Mostramos resultado
@@ -189,6 +205,10 @@ func (c *client) registerUser() {
 
 	// Si fue exitoso, probamos loguear automáticamente.
 	if res.Success {
+		if err := utils.EncryptMessagePrivateKey(privateKey, password, username); err != nil {
+			fmt.Println("Usuario registrado, pero no se pudo guardar la clave privada de mensajes:", err)
+		}
+
 		c.log.Println("Registro exitoso; intentando login automático...")
 
 		loginRes := c.sendRequest(api.Request{
@@ -199,6 +219,10 @@ func (c *client) registerUser() {
 		if loginRes.Success {
 			c.currentUser = username
 			c.authToken = loginRes.Token
+			c.isAdmin = loginRes.IsAdmin
+			c.totpEnabled = loginRes.TOTPEnabled
+			c.keyAuthEnabled = loginRes.KeyAuthEnabled
+			c.messageKey = copyBytes(privateKey)
 			fmt.Println("Login automático exitoso. Token guardado.")
 		} else {
 			fmt.Println("No se ha podido hacer login automático:", loginRes.Message)
@@ -245,6 +269,8 @@ func (c *client) loginUser() {
 			c.currentUser = username
 			c.authToken = totopRes.Token
 			c.totpEnabled = true
+			c.keyAuthEnabled = totopRes.KeyAuthEnabled
+			c.unlockMessageKey(password, username)
 		}
 		return
 	}
@@ -275,6 +301,7 @@ func (c *client) loginUser() {
 			c.isAdmin = r.IsAdmin
 			c.authToken = r.Token
 			c.keyAuthEnabled = r.KeyAuthEnabled
+			c.unlockMessageKey(password, username)
 		}
 		return
 	}
@@ -284,6 +311,8 @@ func (c *client) loginUser() {
 	c.isAdmin = res.IsAdmin
 	c.authToken = res.Token
 	c.totpEnabled = res.TOTPEnabled
+	c.keyAuthEnabled = res.KeyAuthEnabled
+	c.unlockMessageKey(password, username)
 	fmt.Println("Sesión iniciada con éxito. Token guardado.")
 }
 
@@ -315,12 +344,7 @@ func (c *client) fetchData() {
 	}
 
 	if !res.Success && res.SessionExpired {
-		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
-		c.currentUser = ""
-		c.authToken = ""
-		c.totpEnabled = false
-		c.keyAuthEnabled = false
-		c.isAdmin = false
+		c.handleSessionExpired(res)
 	}
 }
 
@@ -349,12 +373,7 @@ func (c *client) updateData() {
 	fmt.Println("Mensaje:", res.Message)
 
 	if !res.Success && res.SessionExpired {
-		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
-		c.currentUser = ""
-		c.authToken = ""
-		c.totpEnabled = false
-		c.keyAuthEnabled = false
-		c.isAdmin = false
+		c.handleSessionExpired(res)
 	}
 }
 
@@ -381,20 +400,58 @@ func (c *client) logoutUser() {
 
 	// Si fue exitoso, limpiamos la sesión local.
 	if res.Success {
+		clearBytes(c.messageKey)
 		c.isAdmin = false
 		c.currentUser = ""
 		c.authToken = ""
 		c.totpEnabled = false
 		c.keyAuthEnabled = false
+		c.messageKey = nil
 	}
 
 	if !res.Success && res.SessionExpired {
-		fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
-		c.currentUser = ""
-		c.authToken = ""
-		c.totpEnabled = false
-		c.keyAuthEnabled = false
-		c.isAdmin = false
+		c.handleSessionExpired(res)
+	}
+}
+
+func (c *client) unlockMessageKey(password, username string) {
+	key, err := utils.DecryptMessagePrivateKey(password, username)
+	if err != nil {
+		clearBytes(c.messageKey)
+		c.messageKey = nil
+		fmt.Println("Aviso: no se pudo desbloquear la clave privada de mensajes:", err)
+		return
+	}
+	clearBytes(c.messageKey)
+	c.messageKey = key
+}
+
+func (c *client) handleSessionExpired(res api.Response) {
+	if !res.SessionExpired {
+		return
+	}
+	fmt.Println("Sesión expirada. Vuelve a iniciar sesión.")
+	clearBytes(c.messageKey)
+	c.currentUser = ""
+	c.authToken = ""
+	c.totpEnabled = false
+	c.keyAuthEnabled = false
+	c.isAdmin = false
+	c.messageKey = nil
+}
+
+func copyBytes(src []byte) []byte {
+	if src == nil {
+		return nil
+	}
+	dst := make([]byte, len(src))
+	copy(dst, src)
+	return dst
+}
+
+func clearBytes(data []byte) {
+	for i := range data {
+		data[i] = 0
 	}
 }
 
