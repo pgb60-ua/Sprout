@@ -44,6 +44,8 @@ const (
 	ActionUpdateFileMetadata = "updateFileMetadata"
 	ActionFilterFilesByTag   = "filterFilesByTag"
 	ActionAddFileComment     = "addFileComment"
+	ActionDeleteFileComment  = "deleteFileComment"
+	ActionListFileComments   = "listFileComments"
 
 	// Role management
 	ActionAssignRole   = "assignRole"
@@ -70,6 +72,7 @@ type Request struct {
 	Tag              string   `json:"tag,omitempty"`
 	Tags             []string `json:"tags,omitempty"`
 	ClearTags        bool     `json:"clear_tags,omitempty"`
+	CommentID        string   `json:"comment_id,omitempty"`
 	CommentText      string   `json:"comment_text,omitempty"`
 	Recipient        string   `json:"recipient,omitempty"`
 	MessageID        string   `json:"message_id,omitempty"`

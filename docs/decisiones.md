@@ -305,6 +305,21 @@ Los tags se han implementado como un atributo dentro de la estructura `FileMetad
 - **Integridad de búsqueda en Carpetas Compartidas:** Tal como ocurre con la lectura de ficheros, la búsqueda de tags en una carpeta compartida (`compartida_<owner>`) resuelve primero el contexto (`resolveFileAccessContext`). Esto significa que si un miembro de la carpeta realiza el filtro por tag, usará implícitamente la clave compartida sin exponerla, y obtendrá todos los ficheros de la carpeta compartida que posean ese tag. Así, los metadatos actúan de manera colaborativa pero estrictamente acotada a quienes tienen acceso.
 - **Sanitización Robusta:** Los inputs provenientes del cliente referidos a los tags se iteran para aplicar `strings.TrimSpace`, ignorar cadenas vacías, de-duplicar resultados usando un mapa interno lógico y, finalmente, ordenarlos alfabéticamente antes de enviarse o persistirse, minimizando inyección de bytes basura o redundancia ineficiente.
 
+### Comentarios en ficheros y carpetas
+Los comentarios se modelan como una lista dentro de `FileMetadata`. Cada comentario guarda un
+identificador, autor, texto y fecha de creación. Al vivir dentro de los metadatos, quedan cifrados
+con la misma clave que el resto de atributos del fichero o carpeta: la DEK personal en rutas propias
+o la clave compartida en rutas `compartida_<owner>`.
+
+La lectura y creación de comentarios exige permiso lógico de lectura (`r`) sobre todo el árbol de la
+ruta y sobre el elemento comentado. Esto permite comentar ficheros propios y también ficheros de
+carpetas compartidas cuando el usuario pertenece al grupo y los permisos efectivos lo permiten.
+
+Los comentarios son colaborativos, no privados por usuario: cualquier usuario que pueda listar los
+comentarios de una ruta ve la misma lista. El borrado queda limitado al autor del comentario o al
+propietario del fichero/carpeta. No se implementa edición de comentarios; si un comentario contiene
+un error, se borra y se crea uno nuevo.
+
 ### Seguridad de carpetas compartidas
 Cada carpeta compartida tiene su propia clave de cifrado, guardada en la DB bajo el namespace
 `shared_folder_keys` y asociada al dueño. Así se evita reutilizar la DEK personal del usuario para

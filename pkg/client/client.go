@@ -585,7 +585,9 @@ func (c *client) fileManagerMenu() {
 			"Crear carpeta",
 			"Borrar carpeta",
 			"Ver metadatos",
+			"Ver comentarios",
 			"Añadir comentario",
+			"Borrar comentario",
 			"Modificar permisos lógicos",
 			"Modificar rol/grupo",
 			"Modificar tags",
@@ -731,7 +733,25 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 9: // Añadir comentario
+		case 9: // Ver comentarios
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if !c.ensureLogicalPermission(path, true, 'r', "ver comentarios") {
+				break
+			}
+			res := c.sendRequest(api.Request{
+				Action:   api.ActionListFileComments,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileComments(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 10: // Añadir comentario
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
 			if !c.ensureLogicalPermission(path, true, 'r', "comentar el fichero o carpeta") {
 				break
@@ -751,7 +771,42 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 10: // Modificar permisos lógicos
+		case 11: // Borrar comentario
+			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
+			if !c.ensureLogicalPermission(path, true, 'r', "borrar comentario") {
+				break
+			}
+			listRes := c.sendRequest(api.Request{
+				Action:   api.ActionListFileComments,
+				Username: c.currentUser,
+				Token:    c.authToken,
+				Path:     path,
+			})
+			fmt.Println("Éxito:", listRes.Success)
+			fmt.Println("Mensaje:", listRes.Message)
+			if !listRes.Success || listRes.FileMetadata == nil {
+				c.maybeOfferDeleteOutOfSyncFile(path, listRes)
+				break
+			}
+			if !printOwnFileComments(*listRes.FileMetadata, c.currentUser) {
+				break
+			}
+			commentID := ui.ReadInput("Introduce el ID del comentario")
+			res := c.sendRequest(api.Request{
+				Action:    api.ActionDeleteFileComment,
+				Username:  c.currentUser,
+				Token:     c.authToken,
+				Path:      path,
+				CommentID: commentID,
+			})
+			fmt.Println("Éxito:", res.Success)
+			fmt.Println("Mensaje:", res.Message)
+			if res.Success && res.FileMetadata != nil {
+				printFileComments(*res.FileMetadata)
+			} else {
+				c.maybeOfferDeleteOutOfSyncFile(path, res)
+			}
+		case 12: // Modificar permisos lógicos
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
 			if isClientRootPath(path) {
 				fmt.Println("Éxito: false")
@@ -773,7 +828,7 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 11: // Modificar rol/grupo
+		case 13: // Modificar rol/grupo
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
 			if isClientRootPath(path) {
 				fmt.Println("Éxito: false")
@@ -795,7 +850,7 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 12: // Modificar tags
+		case 14: // Modificar tags
 			path := ui.ReadInput("Introduce la ruta/nombre del fichero o carpeta")
 			if isClientRootPath(path) {
 				fmt.Println("Éxito: false")
@@ -822,7 +877,7 @@ func (c *client) fileManagerMenu() {
 			} else {
 				c.maybeOfferDeleteOutOfSyncFile(path, res)
 			}
-		case 13: // Filtrar por tag
+		case 15: // Filtrar por tag
 			path := ui.ReadInput("Introduce la carpeta raíz a filtrar (deja vacío para la raíz)")
 			tag := ui.ReadInput("Introduce el tag a buscar")
 			res := c.sendRequest(api.Request{
@@ -837,7 +892,7 @@ func (c *client) fileManagerMenu() {
 			if res.Success && len(res.FileEntries) > 0 {
 				printTaggedEntriesTree(path, res.FileEntries)
 			}
-		case 14: // Ver mis carpetas compartidas
+		case 16: // Ver mis carpetas compartidas
 			res := c.sendRequest(api.Request{
 				Action:   api.ActionListSharedFolders,
 				Username: c.currentUser,
@@ -848,9 +903,9 @@ func (c *client) fileManagerMenu() {
 			if res.Success {
 				fmt.Println("Carpetas compartidas:", res.SharedFolders)
 			}
-		case 15: // Gestionar carpeta compartida
+		case 17: // Gestionar carpeta compartida
 			c.sharedFolderMenu("compartida_" + c.currentUser)
-		case 16: // Volver al menú principal
+		case 18: // Volver al menú principal
 			return
 		}
 		ui.Pause("Pulsa [Enter] para continuar...")
@@ -1099,8 +1154,8 @@ func printFileMetadata(meta api.FileMetadata) {
 	if len(meta.Comments) > 0 {
 		fmt.Println("Comentarios:")
 		for _, comment := range meta.Comments {
-			fmt.Printf("- %s | %s | %s\n", comment.ID, comment.Author, comment.CreatedAt.Format(time.RFC3339))
-			fmt.Println("  " + strings.ReplaceAll(comment.Text, "\n", "\n  "))
+			text := strings.ReplaceAll(comment.Text, "\n", " ")
+			fmt.Printf("- %s | %s | %s\n", text, comment.Author, comment.CreatedAt.Format(time.RFC3339))
 		}
 	} else {
 		fmt.Println("Comentarios: ninguno")
@@ -1113,6 +1168,40 @@ func printFileMetadata(meta api.FileMetadata) {
 	}
 	fmt.Println("Plataforma:", meta.Platform)
 	fmt.Println("-----------------")
+}
+
+func printFileComments(meta api.FileMetadata) {
+	fmt.Println("--- Comentarios ---")
+	fmt.Println("Ruta:", meta.Path)
+	if len(meta.Comments) == 0 {
+		fmt.Println("Sin comentarios")
+		fmt.Println("-------------------")
+		return
+	}
+	for _, comment := range meta.Comments {
+		fmt.Printf("- %s | %s | %s\n", comment.ID, comment.Author, comment.CreatedAt.Format(time.RFC3339))
+		fmt.Println("  " + strings.ReplaceAll(comment.Text, "\n", "\n  "))
+	}
+	fmt.Println("-------------------")
+}
+
+func printOwnFileComments(meta api.FileMetadata, username string) bool {
+	fmt.Println("--- Tus comentarios ---")
+	fmt.Println("Ruta:", meta.Path)
+	found := false
+	for _, comment := range meta.Comments {
+		if comment.Author != username {
+			continue
+		}
+		found = true
+		fmt.Printf("- %s | %s | %s\n", comment.ID, comment.Author, comment.CreatedAt.Format(time.RFC3339))
+		fmt.Println("  " + strings.ReplaceAll(comment.Text, "\n", "\n  "))
+	}
+	if !found {
+		fmt.Println("No tienes comentarios en esta ruta")
+	}
+	fmt.Println("-----------------------")
+	return found
 }
 
 func parseTagList(input string) []string {
