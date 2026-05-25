@@ -1,6 +1,7 @@
 package remoteservice
 
 import (
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -63,7 +64,7 @@ func (s *service) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		expected := "Bearer " + remotecommon.GetSharedSecret()
-		if authHeader != expected {
+		if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expected)) != 1 {
 			http.Error(w, "No autorizado", http.StatusUnauthorized)
 			return
 		}

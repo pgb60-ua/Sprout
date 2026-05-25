@@ -7,11 +7,14 @@ import (
 	"sort"
 	"time"
 
+	"sprout/pkg/netcfg"
 	"sprout/pkg/remotecommon"
 )
 
 func Run() {
-	endpoint, caFile := "https://localhost:8081/logs", "data/certs/ca-cert.pem"
+	cfg := netcfg.Load()
+	endpoint := cfg.RemoteLogURL
+	caFile := cfg.TLSCAFile
 	entries := make(map[string][]byte)
 
 	cli, err := remotecommon.NewHTTPClient(endpoint, caFile, 3*time.Second)
