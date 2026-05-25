@@ -389,6 +389,78 @@ func TestServer_FileCommentsBasicLifecycle(t *testing.T) {
 	if r.Success {
 		t.Fatal("addFileComment deberia rechazar comentarios vacios")
 	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "nota.txt",
+		CommentText: strings.Repeat("x", maxFileCommentBytes+1),
+	})
+	if r.Success {
+		t.Fatal("addFileComment deberia rechazar comentarios demasiado largos")
+	}
+}
+
+func TestServer_FileCommentsLimitPerFile(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "limite.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	for i := 0; i < maxFileCommentsPerFile; i++ {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:      api.ActionAddFileComment,
+			Username:    "alice",
+			Token:       token,
+			Path:        "limite.txt",
+			CommentText: "comentario",
+		})
+		if !r.Success {
+			t.Fatalf("addFileComment %d fallo: %s", i, r.Message)
+		}
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "limite.txt",
+		CommentText: "comentario extra",
+	})
+	if r.Success {
+		t.Fatal("addFileComment deberia rechazar comentarios al superar el limite por fichero")
+	}
 }
 
 func TestServer_FileCommentsSharedVisibilityAndDeleteRules(t *testing.T) {

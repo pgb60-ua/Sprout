@@ -9,6 +9,11 @@ import (
 	"sprout/pkg/utils"
 )
 
+const (
+	maxFileCommentBytes    = 4096
+	maxFileCommentsPerFile = 100
+)
+
 func (s *server) loadCommentableFileMetadata(req api.Request) (api.FileMetadata, fileAccessContext, errorResponse) {
 	if !s.isTokenValid(req.Username, req.Token) {
 		return api.FileMetadata{}, fileAccessContext{}, errorResponse{api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}}
@@ -25,7 +30,7 @@ func (s *server) loadCommentableFileMetadata(req api.Request) (api.FileMetadata,
 	if err != nil {
 		return api.FileMetadata{}, fileAccessContext{}, errorResponse{api.Response{Success: false, Message: "El fichero o directorio no existe"}}
 	}
-	if perm := s.requirePathPermission(req.Username, ctx.baseDEK, req.Path, true, 'r'); !perm.Success {
+	if perm := s.requirePathPermissionForContext(req.Username, ctx, req.Path, true, 'r', info); !perm.Success {
 		return api.FileMetadata{}, fileAccessContext{}, errorResponse{perm}
 	}
 	meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, req.Path, info)
@@ -56,10 +61,16 @@ func (s *server) addFileComment(req api.Request) api.Response {
 	if text == "" {
 		return api.Response{Success: false, Message: "El comentario no puede estar vacio"}
 	}
+	if len([]byte(text)) > maxFileCommentBytes {
+		return api.Response{Success: false, Message: "El comentario supera el tamano maximo permitido"}
+	}
 
 	meta, ctx, errRes := s.loadCommentableFileMetadata(req)
 	if errRes.failed() {
 		return errRes.response
+	}
+	if len(meta.Comments) >= maxFileCommentsPerFile {
+		return api.Response{Success: false, Message: "Se ha alcanzado el numero maximo de comentarios para esta ruta"}
 	}
 	id, err := utils.NewRandomToken(12)
 	if err != nil {

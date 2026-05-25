@@ -788,8 +788,14 @@ func (c *client) fileManagerMenu() {
 				c.maybeOfferDeleteOutOfSyncFile(path, listRes)
 				break
 			}
-			if !printOwnFileComments(*listRes.FileMetadata, c.currentUser) {
-				break
+			if c.currentUser == listRes.FileMetadata.Owner {
+				if !printFileComments(*listRes.FileMetadata) {
+					break
+				}
+			} else {
+				if !printOwnFileComments(*listRes.FileMetadata, c.currentUser) {
+					break
+				}
 			}
 			commentID := ui.ReadInput("Introduce el ID del comentario")
 			res := c.sendRequest(api.Request{
@@ -1170,19 +1176,20 @@ func printFileMetadata(meta api.FileMetadata) {
 	fmt.Println("-----------------")
 }
 
-func printFileComments(meta api.FileMetadata) {
+func printFileComments(meta api.FileMetadata) bool {
 	fmt.Println("--- Comentarios ---")
 	fmt.Println("Ruta:", meta.Path)
 	if len(meta.Comments) == 0 {
 		fmt.Println("Sin comentarios")
 		fmt.Println("-------------------")
-		return
+		return false
 	}
 	for _, comment := range meta.Comments {
 		fmt.Printf("- %s | %s | %s\n", comment.ID, comment.Author, comment.CreatedAt.Format(time.RFC3339))
 		fmt.Println("  " + strings.ReplaceAll(comment.Text, "\n", "\n  "))
 	}
 	fmt.Println("-------------------")
+	return true
 }
 
 func printOwnFileComments(meta api.FileMetadata, username string) bool {
