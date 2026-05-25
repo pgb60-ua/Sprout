@@ -307,6 +307,335 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 	}
 }
 
+func TestServer_FileCommentsBasicLifecycle(t *testing.T) {
+	ts, _, dbPath := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "nota.txt",
+		CommentText: "revisar este fichero",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("addFileComment fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("comentarios inesperados: %+v", r.FileMetadata.Comments)
+	}
+	comment := r.FileMetadata.Comments[0]
+	if comment.ID == "" || comment.Author != "alice" || comment.Text != "revisar este fichero" || comment.CreatedAt.IsZero() {
+		t.Fatalf("comentario invalido: %+v", comment)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("getFileMetadata no devolvio comentario: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer server.db: %v", err)
+	}
+	if strings.Contains(string(dbBytes), "revisar este fichero") {
+		t.Fatal("el comentario quedo en claro en server.db")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "nota.txt",
+		CommentText: "   ",
+	})
+	if r.Success {
+		t.Fatal("addFileComment deberia rechazar comentarios vacios")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "nota.txt",
+		CommentText: strings.Repeat("x", maxFileCommentBytes+1),
+	})
+	if r.Success {
+		t.Fatal("addFileComment deberia rechazar comentarios demasiado largos")
+	}
+}
+
+func TestServer_FileCommentsLimitPerFile(t *testing.T) {
+	ts, _, _ := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "limite.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	for i := 0; i < maxFileCommentsPerFile; i++ {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:      api.ActionAddFileComment,
+			Username:    "alice",
+			Token:       token,
+			Path:        "limite.txt",
+			CommentText: "comentario",
+		})
+		if !r.Success {
+			t.Fatalf("addFileComment %d fallo: %s", i, r.Message)
+		}
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "limite.txt",
+		CommentText: "comentario extra",
+	})
+	if r.Success {
+		t.Fatal("addFileComment deberia rechazar comentarios al superar el limite por fichero")
+	}
+}
+
+func TestServer_FileCommentsSharedVisibilityAndDeleteRules(t *testing.T) {
+	ts, _ := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	aliceToken := registerAndLogin(t, httpClient, apiURL, "alice", "password123")
+	bobToken := registerAndLogin(t, httpClient, apiURL, "bob", "password123")
+	charlieToken := registerAndLogin(t, httpClient, apiURL, "charlie", "password123")
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice",
+	})
+	if !r.Success {
+		t.Fatalf("create shared folder fallo: %s", r.Message)
+	}
+	for _, username := range []string{"bob", "charlie"} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:     api.ActionSharedFolderAddMember,
+			Username:   "alice",
+			Token:      aliceToken,
+			Path:       "compartida_alice",
+			TargetUser: username,
+		})
+		if !r.Success {
+			t.Fatalf("sharedFolderAddMember %q fallo: %s", username, r.Message)
+		}
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice/nota.txt",
+		Data:     "contenido compartido",
+	})
+	if !r.Success {
+		t.Fatalf("create shared file fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "bob",
+		Token:       bobToken,
+		Path:        "compartida_alice/nota.txt",
+		CommentText: "comentario de bob",
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("bob deberia poder comentar en compartida: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+	bobCommentID := r.FileMetadata.Comments[0].ID
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionListFileComments,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice/nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 1 || r.FileMetadata.Comments[0].Text != "comentario de bob" {
+		t.Fatalf("alice deberia ver comentario compartido: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionDeleteFileComment,
+		Username:  "charlie",
+		Token:     charlieToken,
+		Path:      "compartida_alice/nota.txt",
+		CommentID: bobCommentID,
+	})
+	if r.Success {
+		t.Fatal("charlie no deberia borrar comentarios ajenos sin ser propietario")
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionDeleteFileComment,
+		Username:  "bob",
+		Token:     bobToken,
+		Path:      "compartida_alice/nota.txt",
+		CommentID: bobCommentID,
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 0 {
+		t.Fatalf("bob deberia borrar su propio comentario: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "bob",
+		Token:       bobToken,
+		Path:        "compartida_alice/nota.txt",
+		CommentText: "otro comentario",
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("bob deberia poder comentar de nuevo: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+	bobCommentID = r.FileMetadata.Comments[0].ID
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:    api.ActionDeleteFileComment,
+		Username:  "alice",
+		Token:     aliceToken,
+		Path:      "compartida_alice/nota.txt",
+		CommentID: bobCommentID,
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 0 {
+		t.Fatalf("alice propietaria deberia borrar comentario: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+}
+
+func TestServer_FileCommentsRequireReadPermission(t *testing.T) {
+	ts, _ := newRolesTestServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	aliceToken := registerAndLogin(t, httpClient, apiURL, "alice", "password123")
+	bobToken := registerAndLogin(t, httpClient, apiURL, "bob", "password123")
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateDir,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice",
+	})
+	if !r.Success {
+		t.Fatalf("create shared folder fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:     api.ActionSharedFolderAddMember,
+		Username:   "alice",
+		Token:      aliceToken,
+		Path:       "compartida_alice",
+		TargetUser: "bob",
+	})
+	if !r.Success {
+		t.Fatalf("sharedFolderAddMember fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice/nota.txt",
+		Data:     "contenido compartido",
+	})
+	if !r.Success {
+		t.Fatalf("create shared file fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionUpdateFileMetadata,
+		Username: "alice",
+		Token:    aliceToken,
+		Path:     "compartida_alice/nota.txt",
+		Data:     "rw-------",
+	})
+	if !r.Success {
+		t.Fatalf("updateFileMetadata fallo: %s", r.Message)
+	}
+
+	for _, action := range []string{api.ActionListFileComments, api.ActionAddFileComment} {
+		_, r = postJSON(t, httpClient, apiURL, api.Request{
+			Action:      action,
+			Username:    "bob",
+			Token:       bobToken,
+			Path:        "compartida_alice/nota.txt",
+			CommentText: "no permitido",
+		})
+		if r.Success {
+			t.Fatalf("%s deberia fallar sin permiso de lectura", action)
+		}
+	}
+}
+
 func TestServer_FileMetadataRejectsInvalidTokenAndTraversal(t *testing.T) {
 	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"

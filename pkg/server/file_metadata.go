@@ -386,11 +386,19 @@ func (s *server) loadPermissionTree(username string, _ []byte, path string, incl
 	if err != nil {
 		return nil, err
 	}
+	return s.loadPermissionTreeForContext(username, ctx, normalized, includeTarget, nil)
+}
 
+func (s *server) loadPermissionTreeForContext(username string, ctx fileAccessContext, path string, includeTarget bool, targetInfo os.FileInfo) ([]api.FileMetadata, error) {
+	normalized := normalizedFilePath(path)
 	if ctx.isShared {
-		rootInfo, err := os.Stat(sharedFolderRootAbsPath(ctx.owner))
-		if err != nil {
-			return nil, err
+		rootInfo := targetInfo
+		if normalized != ctx.rootPath || rootInfo == nil {
+			var err error
+			rootInfo, err = os.Stat(sharedFolderRootAbsPath(ctx.owner))
+			if err != nil {
+				return nil, err
+			}
 		}
 		rootMeta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, ctx.rootPath, rootInfo)
 		if err != nil {
@@ -406,9 +414,13 @@ func (s *server) loadPermissionTree(username string, _ []byte, path string, incl
 		}
 		for _, prefix := range prefixes {
 			absPath := filepath.Join(ctx.baseDir, filepath.FromSlash(prefix))
-			info, err := os.Stat(absPath)
-			if err != nil {
-				return nil, err
+			info := targetInfo
+			if prefix != normalized || info == nil {
+				var err error
+				info, err = os.Stat(absPath)
+				if err != nil {
+					return nil, err
+				}
 			}
 			meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, prefix, info)
 			if err != nil {
@@ -426,9 +438,13 @@ func (s *server) loadPermissionTree(username string, _ []byte, path string, incl
 	}
 	for _, prefix := range prefixes {
 		absPath := filepath.Join(ctx.baseDir, filepath.FromSlash(prefix))
-		info, err := os.Stat(absPath)
-		if err != nil {
-			return nil, err
+		info := targetInfo
+		if prefix != normalized || info == nil {
+			var err error
+			info, err = os.Stat(absPath)
+			if err != nil {
+				return nil, err
+			}
 		}
 		meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, prefix, info)
 		if err != nil {
@@ -450,6 +466,17 @@ func (s *server) hasPermissionThroughTree(username string, tree []api.FileMetada
 
 func (s *server) requirePathPermission(username string, dek []byte, path string, includeTarget bool, permission byte) api.Response {
 	tree, err := s.loadPermissionTree(username, dek, path, includeTarget)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener permisos del arbol"}
+	}
+	if !s.hasPermissionThroughTree(username, tree, permission) {
+		return api.Response{Success: false, Message: "Permiso denegado"}
+	}
+	return api.Response{Success: true}
+}
+
+func (s *server) requirePathPermissionForContext(username string, ctx fileAccessContext, path string, includeTarget bool, permission byte, targetInfo os.FileInfo) api.Response {
+	tree, err := s.loadPermissionTreeForContext(username, ctx, path, includeTarget, targetInfo)
 	if err != nil {
 		return api.Response{Success: false, Message: "Error al obtener permisos del arbol"}
 	}

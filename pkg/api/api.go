@@ -43,6 +43,9 @@ const (
 	ActionGetFileMetadata    = "getFileMetadata"
 	ActionUpdateFileMetadata = "updateFileMetadata"
 	ActionFilterFilesByTag   = "filterFilesByTag"
+	ActionAddFileComment     = "addFileComment"
+	ActionDeleteFileComment  = "deleteFileComment"
+	ActionListFileComments   = "listFileComments"
 
 	// Role management
 	ActionAssignRole   = "assignRole"
@@ -69,6 +72,8 @@ type Request struct {
 	Tag              string   `json:"tag,omitempty"`
 	Tags             []string `json:"tags,omitempty"`
 	ClearTags        bool     `json:"clear_tags,omitempty"`
+	CommentID        string   `json:"comment_id,omitempty"`
+	CommentText      string   `json:"comment_text,omitempty"`
 	Recipient        string   `json:"recipient,omitempty"`
 	MessageID        string   `json:"message_id,omitempty"`
 	Ciphertext       string   `json:"ciphertext,omitempty"`
@@ -90,18 +95,26 @@ type MessageSummary struct {
 }
 
 type FileMetadata struct {
-	Path        string    `json:"path"`
-	Name        string    `json:"name"`
-	IsDir       bool      `json:"is_dir"`
-	Size        int64     `json:"size"`
-	Owner       string    `json:"owner"`
-	Role        string    `json:"role,omitempty"`
-	Tags        []string  `json:"tags,omitempty"`
-	Permissions string    `json:"permissions"`
-	CreatedAt   time.Time `json:"created_at"`
-	ModifiedAt  time.Time `json:"modified_at"`
-	AccessedAt  time.Time `json:"accessed_at,omitempty"`
-	Platform    string    `json:"platform"`
+	Path        string        `json:"path"`
+	Name        string        `json:"name"`
+	IsDir       bool          `json:"is_dir"`
+	Size        int64         `json:"size"`
+	Owner       string        `json:"owner"`
+	Role        string        `json:"role,omitempty"`
+	Tags        []string      `json:"tags,omitempty"`
+	Comments    []FileComment `json:"comments,omitempty"`
+	Permissions string        `json:"permissions"`
+	CreatedAt   time.Time     `json:"created_at"`
+	ModifiedAt  time.Time     `json:"modified_at"`
+	AccessedAt  time.Time     `json:"accessed_at,omitempty"`
+	Platform    string        `json:"platform"`
+}
+
+type FileComment struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type FileEntry struct {
