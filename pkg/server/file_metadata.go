@@ -311,10 +311,6 @@ func validFilePermissions(permissions string) bool {
 	return true
 }
 
-func hasLogicalPermission(meta api.FileMetadata, permission byte) bool {
-	return hasPermissionAt(meta.Permissions, 0, permission)
-}
-
 func hasPermissionAt(permissions string, offset int, permission byte) bool {
 	if len(permissions) != 9 || offset < 0 || offset+2 >= len(permissions) {
 		return false

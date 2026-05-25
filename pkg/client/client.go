@@ -981,7 +981,7 @@ func (c *client) ensureLogicalPermission(path string, includeTarget bool, permis
 		return false
 	}
 	printPermissionTree(tree)
-	if !hasClientPermissionThroughTree(tree, permission) {
+	if !hasClientPermissionThroughTree(tree, c.currentUser, permission) {
 		fmt.Println("Éxito: false")
 		fmt.Println("Mensaje: permiso denegado para " + operation)
 		return false
@@ -996,7 +996,7 @@ func (c *client) ensureParentLogicalPermission(path string, permission byte, ope
 		return false
 	}
 	printPermissionTree(tree)
-	if !hasClientPermissionThroughTree(tree, permission) {
+	if !hasClientPermissionThroughTree(tree, c.currentUser, permission) {
 		fmt.Println("Éxito: false")
 		fmt.Println("Mensaje: permiso denegado para " + operation)
 		return false
@@ -1080,26 +1080,30 @@ func printTaggedEntriesTree(root string, entries []api.FileEntry) {
 	fmt.Println("------------------------------------")
 }
 
-func hasClientPermissionThroughTree(tree []api.FileMetadata, permission byte) bool {
+func hasClientPermissionThroughTree(tree []api.FileMetadata, username string, permission byte) bool {
 	for _, meta := range tree {
-		if !hasClientLogicalPermission(meta, permission) {
+		if !hasClientLogicalPermission(meta, username, permission) {
 			return false
 		}
 	}
 	return true
 }
 
-func hasClientLogicalPermission(meta api.FileMetadata, permission byte) bool {
-	if len(meta.Permissions) < 3 {
+func hasClientLogicalPermission(meta api.FileMetadata, username string, permission byte) bool {
+	if len(meta.Permissions) < 6 {
 		return false
+	}
+	offset := 3 // grupo: permisos efectivos para miembros no propietarios
+	if username == meta.Owner {
+		offset = 0
 	}
 	switch permission {
 	case 'r':
-		return meta.Permissions[0] == 'r'
+		return meta.Permissions[offset] == 'r'
 	case 'w':
-		return meta.Permissions[1] == 'w'
+		return meta.Permissions[offset+1] == 'w'
 	case 'x':
-		return meta.Permissions[2] == 'x'
+		return meta.Permissions[offset+2] == 'x'
 	default:
 		return false
 	}

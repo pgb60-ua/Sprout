@@ -109,14 +109,20 @@ func (s *server) tOTPConfirm(req api.Request) api.Response {
 func (s *server) loginTOTP(req api.Request) api.Response {
 	s.mu.Lock()
 	pending, ok := s.pendingTOTP[req.TempToken]
-	if ok && time.Now().After(pending.ExpiresAt) {
+	if ok {
 		delete(s.pendingTOTP, req.TempToken)
-		ok = false
+		if time.Now().After(pending.ExpiresAt) {
+			ok = false
+		}
 	}
 	s.mu.Unlock()
 
 	if !ok {
 		return api.Response{Success: false, Message: "Token temporal invalido"}
+	}
+
+	if err := s.CheckLoginAllowed(pending.Username); err != nil {
+		return api.Response{Success: false, Message: err.Error()}
 	}
 
 	td, err := s.getTOTPData(pending.Username)
@@ -129,15 +135,11 @@ func (s *server) loginTOTP(req api.Request) api.Response {
 	}
 
 	if !utils.VerifyTOTPCode(td.Secret, req.TOTPCode, time.Now()) {
-		s.mu.Lock()
-		delete(s.pendingTOTP, req.TempToken)
-		s.mu.Unlock()
+		s.RegisterLoginFailure(pending.Username)
 		return api.Response{Success: false, Message: "Codigo TOTP incorrecto"}
 	}
 
-	s.mu.Lock()
-	delete(s.pendingTOTP, req.TempToken)
-	s.mu.Unlock()
+	s.ClearLoginFailures(pending.Username)
 
 	token, err := utils.NewRandomToken(lengthToken)
 	if err != nil {
@@ -176,6 +178,9 @@ func (s *server) totpDisable(req api.Request) api.Response {
 	}
 
 	// Pido el codigo actual para confirmar que es el usuario
+	if td.LastCode == req.TOTPCode {
+		return api.Response{Success: false, Message: "Codigo ya utilizado"}
+	}
 	if !utils.VerifyTOTPCode(td.Secret, req.TOTPCode, time.Now()) {
 		return api.Response{Success: false, Message: "Codigo TOTP incorrecto"}
 	}

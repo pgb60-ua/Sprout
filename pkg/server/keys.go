@@ -78,9 +78,11 @@ func (s *server) keyDisable(req api.Request) api.Response {
 func (s *server) loginKey(req api.Request) api.Response {
 	s.mu.Lock()
 	pending, ok := s.pendingKey[req.TempToken]
-	if ok && time.Now().After(pending.ExpiresAt) {
+	if ok {
 		delete(s.pendingKey, req.TempToken)
-		ok = false
+		if time.Now().After(pending.ExpiresAt) {
+			ok = false
+		}
 	}
 	s.mu.Unlock()
 
@@ -92,10 +94,6 @@ func (s *server) loginKey(req api.Request) api.Response {
 	if err != nil || !kd.Enabled {
 		return api.Response{Success: false, Message: "El usuario no tiene autenticacion por clave activa"}
 	}
-
-	s.mu.Lock()
-	delete(s.pendingKey, req.TempToken)
-	s.mu.Unlock()
 
 	if !utils.VerifySignature(kd.PublicKey, pending.Challenge, req.Signature) {
 		return api.Response{Success: false, Message: "Firma invalida"}

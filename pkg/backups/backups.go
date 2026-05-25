@@ -25,6 +25,13 @@ func Run() {
 	backupRoot := "data/remote/backups"
 	targetDir := "data"
 
+	fmt.Println("AVISO: La restauración sobrescribirá server.db y los ficheros actuales.")
+	fmt.Println("El servidor debe estar detenido antes de continuar para evitar corrupción de datos.")
+	if !ui.Confirm("¿Confirmas que el servidor está detenido y deseas continuar?") {
+		fmt.Println("Restauración cancelada.")
+		return
+	}
+
 	entries, err := os.ReadDir(backupRoot)
 	if err != nil {
 		fmt.Printf("Error leyendo directorio de backups: %v\n", err)
