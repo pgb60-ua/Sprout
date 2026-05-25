@@ -1,12 +1,12 @@
 /*
-'sprout' es una base para el desarrollo de prácticas en clase con Go.
-
-Se puede compilar con "go build" en el directorio donde resida main.go
-o "go build -o nombre" para que el ejecutable tenga un nombre distinto
-
-curso: 			**rellenar**
-asignatura: 	**antes de**
-estudiantes: 	**entregar**
+curso: 			2025-2026
+asignatura: 	Seguridad del Diseño de Software
+estudiantes:
+- Casado López, Carlos María
+- García Belando, Pablo
+- Jiménez Martínez, Alejandro
+- Seva Berenguer, Marcos
+- Tornero Fuster, Manuel José
 */
 package main
 
