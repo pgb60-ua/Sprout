@@ -307,6 +307,79 @@ func TestServer_FileMetadataLifecycle(t *testing.T) {
 	}
 }
 
+func TestServer_FileCommentsBasicLifecycle(t *testing.T) {
+	ts, _, dbPath := newTestTLSServer(t)
+	apiURL := ts.URL + "/api"
+	httpClient := ts.Client()
+	httpClient.Timeout = 2 * time.Second
+
+	_, r := postJSON(t, httpClient, apiURL, api.Request{
+		Action:           api.ActionRegister,
+		Username:         "alice",
+		Password:         "password123",
+		MessagePublicKey: newTestPublicKey(t),
+	})
+	if !r.Success {
+		t.Fatalf("register fallo: %s", r.Message)
+	}
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionLogin,
+		Username: "alice",
+		Password: "password123",
+	})
+	if !r.Success {
+		t.Fatalf("login fallo: %s", r.Message)
+	}
+	token := r.Token
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionCreateFile,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+		Data:     "contenido",
+	})
+	if !r.Success {
+		t.Fatalf("createFile fallo: %s", r.Message)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:      api.ActionAddFileComment,
+		Username:    "alice",
+		Token:       token,
+		Path:        "nota.txt",
+		CommentText: "revisar este fichero",
+	})
+	if !r.Success || r.FileMetadata == nil {
+		t.Fatalf("addFileComment fallo: success=%v msg=%q", r.Success, r.Message)
+	}
+	if len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("comentarios inesperados: %+v", r.FileMetadata.Comments)
+	}
+	comment := r.FileMetadata.Comments[0]
+	if comment.ID == "" || comment.Author != "alice" || comment.Text != "revisar este fichero" || comment.CreatedAt.IsZero() {
+		t.Fatalf("comentario invalido: %+v", comment)
+	}
+
+	_, r = postJSON(t, httpClient, apiURL, api.Request{
+		Action:   api.ActionGetFileMetadata,
+		Username: "alice",
+		Token:    token,
+		Path:     "nota.txt",
+	})
+	if !r.Success || r.FileMetadata == nil || len(r.FileMetadata.Comments) != 1 {
+		t.Fatalf("getFileMetadata no devolvio comentario: success=%v msg=%q meta=%+v", r.Success, r.Message, r.FileMetadata)
+	}
+
+	dbBytes, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatalf("no se pudo leer server.db: %v", err)
+	}
+	if strings.Contains(string(dbBytes), "revisar este fichero") {
+		t.Fatal("el comentario quedo en claro en server.db")
+	}
+}
+
 func TestServer_FileMetadataRejectsInvalidTokenAndTraversal(t *testing.T) {
 	ts, _, _ := newTestTLSServer(t)
 	apiURL := ts.URL + "/api"

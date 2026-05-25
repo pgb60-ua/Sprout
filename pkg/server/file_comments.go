@@ -1,0 +1,55 @@
+package server
+
+import (
+	"os"
+	"strings"
+	"time"
+
+	"sprout/pkg/api"
+	"sprout/pkg/utils"
+)
+
+func (s *server) addFileComment(req api.Request) api.Response {
+	if !s.isTokenValid(req.Username, req.Token) {
+		return api.Response{Success: false, Message: "Token invalido o sesion expirada", SessionExpired: true}
+	}
+	if req.Path == "" {
+		return api.Response{Success: false, Message: "Falta el path del fichero o directorio"}
+	}
+	text := strings.TrimSpace(req.CommentText)
+	if text == "" {
+		return api.Response{Success: false, Message: "El comentario no puede estar vacio"}
+	}
+
+	ctx, err := s.resolveFileAccessContext(req.Username, req.Path)
+	if err != nil {
+		return api.Response{Success: false, Message: err.Error()}
+	}
+	info, err := os.Stat(ctx.absPath)
+	if err != nil {
+		return api.Response{Success: false, Message: "El fichero o directorio no existe"}
+	}
+	if perm := s.requirePathPermission(req.Username, ctx.baseDEK, req.Path, true, 'r'); !perm.Success {
+		return perm
+	}
+
+	meta, err := s.ensureFileMetadata(ctx.storageUser, ctx.baseDEK, req.Path, info)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al obtener metadatos"}
+	}
+	id, err := utils.NewRandomToken(12)
+	if err != nil {
+		return api.Response{Success: false, Message: "Error al generar identificador del comentario"}
+	}
+	meta.Comments = append(meta.Comments, api.FileComment{
+		ID:        id,
+		Author:    req.Username,
+		Text:      text,
+		CreatedAt: time.Now().UTC(),
+	})
+	meta.ModifiedAt = time.Now().UTC()
+	if err := s.saveFileMetadata(ctx.storageUser, ctx.baseDEK, meta); err != nil {
+		return api.Response{Success: false, Message: "Error al guardar comentario"}
+	}
+	return api.Response{Success: true, Message: "Comentario añadido", FileMetadata: &meta}
+}

@@ -230,6 +230,8 @@ func (s *server) apiHandler(w http.ResponseWriter, r *http.Request) {
 		res = s.updateFileMetadata(req)
 	case api.ActionFilterFilesByTag:
 		res = s.filterFilesByTag(req)
+	case api.ActionAddFileComment:
+		res = s.addFileComment(req)
 	case api.ActionSharedFolderAddMember:
 		res = s.sharedFolderAddMember(req)
 	case api.ActionSharedFolderRemoveMember:
